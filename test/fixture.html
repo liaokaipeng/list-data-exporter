@@ -10,6 +10,10 @@
   .card { border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
   .card h3 { margin: 0 0 4px; font-size: 14px; }
   .meta { color: #999; font-size: 12px; }
+  /* 双列条纹列表：li 交错 DOM 序（1,6,2,7…），odd/even 条纹类 + float 双列布局 */
+  #striped { list-style: none; padding: 0; margin: 0; width: 560px; overflow: auto; }
+  #striped li { float: left; width: 260px; height: 28px; line-height: 28px; border-bottom: 1px solid #f0f0f0; }
+  #striped li.odd { margin-right: 40px; }
 </style>
 </head>
 <body>
@@ -44,6 +48,31 @@
     <li><a href="https://example.com/comment/8">郑十：CSV 打开不乱码</a></li>
     <li><a href="https://example.com/comment/9">钱一：Markdown 表格正常</a></li>
     <li><a href="https://example.com/comment/10">刘二：导出完还能继续收集</a></li>
+  </ul>
+</section>
+
+<!-- 预期（真列表语义 + 双列条纹 + Ctrl 子集/并组）：
+     ① 收集模式点击任一 li → 全部 10 个 li 整表收集（odd/even 条纹类不拆列表），
+        面板行「10 条」，页面徽标 1..10；导出顺序 = 列优先：左列 1-5 自上而下，再右列 6-10
+        （DOM 交错序 1,6,2,7,3,8,4,9,5,10 被还原）；再次点击任一 li → 整表移除
+     ② Ctrl+点击左列任一 li → 只收左列 5 条（odd 严格签名，徽标 1..5）；
+        Ctrl+点击右列任一 li → 只收右列 5 条（even 严格签名）——两个条目默认导出 = 一簿两 Sheet；
+        再 Ctrl+点击左列任一 li → 移除左列条目（同容器按条目重叠 toggle，不误删右列）
+     ③ 选择模式 Ctrl+点击两个条目行 → 并入同一 Sheet（行徽标同号、标题「已选 2 · 1 Sheet」），
+        导出 = 一个 Sheet 10 行（左列 5 行 + 右列 5 行，选择序拼接） -->
+<section>
+  <h2>双列条纹列表（真列表语义验证，10 条）</h2>
+  <ul id="striped">
+    <li class="item odd">热搜 1 左列第一条</li>
+    <li class="item even">热搜 6 右列第一条</li>
+    <li class="item odd">热搜 2 左列第二条</li>
+    <li class="item even">热搜 7 右列第二条</li>
+    <li class="item odd">热搜 3 左列第三条</li>
+    <li class="item even">热搜 8 右列第三条</li>
+    <li class="item odd">热搜 4 左列第四条</li>
+    <li class="item even">热搜 9 右列第四条</li>
+    <li class="item odd">热搜 5 左列第五条</li>
+    <li class="item even">热搜 10 右列第五条</li>
   </ul>
 </section>
 

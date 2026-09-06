@@ -3,6 +3,12 @@
  * 多列表多选导出（xlsx / csv / json / md / html，须最后注入）
  * 依赖 window.__lde 命名空间（entry / util / detect / format 先行注入）；
  * UI 层与算法层只经命名空间单向调用。
+ * v1.3 交互增强：
+ *   - 真列表语义收集：点击 ul/ol 内任一 li = 全部 li 整表收集（无视 odd/even
+ *     条纹类；整表条目经 visualOrder 列优先重排——双列交错 DOM 序还原阅读顺序）；
+ *     Ctrl+点击 = 严格签名只收同样式子集（如双列布局单收一列）
+ *   - 选择模式 Ctrl+点击 = 并入最近选中条目的 Sheet 组（groupId），同组多个
+ *     收集列表导出时拼接为同一个 Sheet；行序号徽标显示 Sheet 序号直观可见
  * v1.2 交互模型（无自动识别）：
  *   - 「添加选择」进入收集模式：点击列表中任一元素 = 收集该列表全部同类条目
  *     （findContainingList 同签名兄弟识别，整表为一条目，再次点击整表移除）；
@@ -21,7 +27,7 @@
   const ns = window.__lde;
   if (!ns || ns.aborted) return; // 守卫已退出（再次点击图标 = 收起/退出），不初始化
   const { timestamp, sanitizeFilename, normalizeText, autoColWidths } = ns.util;
-  const { pickItem, previewOf, firstItemText, makeListName, findContainingList } = ns.detect;
+  const { pickItem, previewOf, firstItemText, makeListName, findContainingList, visualOrder } = ns.detect;
   const { toCsv, toJson, toMarkdown, toHtmlDocument } = ns.format;
 
   // 导出格式注册表：label 为按钮文案、ext 为文件扩展名、mime 为下载 MIME
@@ -49,11 +55,13 @@
   let dragInfo = null;     // 标题栏拖拽状态
   let shield = null;       // 采集盾：收集模式的全屏透明拦截层（见 mountShield）
 
-  // 收集列表数据模型：{ items: Element[]（有序 = 导出行序）, container（整表收集的
-  // 列表容器，同容器点击 = 同一列表 toggle；单条收集无）, withLinks, preview, full, rowEl, flashT }
+  // 收集列表数据模型：{ items: Element[]（有序 = 导出行序，整表收集经 visualOrder
+  // 列优先重排）, container（整表收集的列表容器，同容器条目重叠点击 = 同一列表
+  // toggle；单条收集无）, withLinks, preview, full, rowEl, flashT, groupId }
   let entries = [];
   let currentManual = null;      // 收集模式中的活动列表（独立元素单条累积）
   const selected = new Set();    // 已选收集列表（Set 保序 = 导出顺序）
+  let groupSeq = 0;              // Sheet 组序号发生器（Ctrl 并组见 addSelected）
   const overlays = new Map();    // 列表 → 覆盖层盒子数组（每元素一个，含序号徽标）
   let hoverTarget = null;        // { type:'entry', entry } | { type:'items', items } | { type:'el', el }
   let lastHoverEntry = null;     // 页面悬浮联动：上次强调的条目（防重复闪烁）
@@ -316,7 +324,7 @@
     row.appendChild(lab);
     row.addEventListener('mouseenter', () => onRowHover(entry));
     row.addEventListener('mouseleave', clearHover);
-    row.addEventListener('click', () => toggleSelect(entry));
+    row.addEventListener('click', e => toggleSelect(entry, e.ctrlKey || e.metaKey));
     entry.rowEl = row;
     entry.flashT = 0;
     return row;
@@ -398,16 +406,21 @@
 
   /* ---------------- 选中状态管理 ---------------- */
 
-  function toggleSelect(entry) {
+  function toggleSelect(entry, merge) {
     if (selected.has(entry)) {
       removeSelected(entry);
     } else {
-      addSelected(entry);
+      addSelected(entry, merge);
     }
   }
 
-  function addSelected(entry) {
+  /** 选中收集列表：merge=true（Ctrl+点击）并入最近选中条目的 Sheet 组
+   *  （同组多条目导出拼接为同一个 Sheet，组内行序 = 选择序）；
+   *  否则新开一组（一列表一 Sheet 的默认行为） */
+  function addSelected(entry, merge) {
     if (selected.has(entry)) return;
+    const last = [...selected].slice(-1)[0];
+    entry.groupId = (merge && last) ? last.groupId : ++groupSeq;
     selected.add(entry); // Set 保序 = 导出顺序
     rebuildOverlay(entry);
     if (entry.rowEl) entry.rowEl.classList.add('lde-on');
@@ -417,6 +430,7 @@
   function removeSelected(entry) {
     if (!selected.has(entry)) return;
     selected.delete(entry);
+    entry.groupId = null; // 退出选中即脱离并组（剩余成员分组不受影响）
     const boxes = overlays.get(entry);
     if (boxes) boxes.forEach(b => b.remove());
     overlays.delete(entry);
@@ -476,19 +490,27 @@
     }
   }
 
-  /** 工具栏与徽标状态统一刷新：已选计数、导出按钮禁用态、
-   *  页面徽标（列表内元素序号）、面板行序号徽标（已选 = 选中序号，未选 = 行序） */
+  /** 工具栏与徽标状态统一刷新：已选计数（并组时附 Sheet 数）、导出按钮禁用态、
+   *  页面徽标（列表内元素序号）、面板行序号徽标（已选 = Sheet 序号——同组
+   *  并组条目同号直观可见；未选 = 行序） */
   function updateBar() {
-    countEl.textContent = String(selected.size);
+    const sheetNo = new Map(); // groupId → Sheet 序号（按选择序分配）
+    let sheets = 0;
+    for (const en of selected) {
+      if (!sheetNo.has(en.groupId)) sheetNo.set(en.groupId, ++sheets);
+    }
+    countEl.textContent = sheets < selected.size
+      ? selected.size + ' · ' + sheets + ' Sheet'
+      : String(selected.size);
     for (const boxes of overlays.values()) {
       boxes.forEach((b, i) => { b.firstChild.textContent = String(i + 1); });
     }
-    const order = new Map([...selected].map((en, k) => [en, k + 1]));
     entries.forEach((en, idx) => {
       if (!en.rowEl) return;
       const badge = en.rowEl.querySelector('.lde-idx');
-      const ord = order.get(en);
-      badge.textContent = String(ord != null ? ord : idx + 1);
+      const sn = selected.has(en) ? sheetNo.get(en.groupId) : null;
+      badge.textContent = String(sn != null ? sn : idx + 1);
+      badge.title = sn != null ? '导出 Sheet 序号（Ctrl+点击可并入同一 Sheet）' : '';
     });
     exportBtn.disabled = exporting || ![...selected].some(en => en.items.length);
   }
@@ -516,8 +538,9 @@
     if (e.composedPath().includes(host)) { if (manualMode) clearHover(); return; }
     if (manualMode) {
       // 盾层为命中目标（进盾瞬间触发一次）→ 坐标探测还原真实元素；
-      // 之后在盾层内移动由 onShieldMove 持续探测
-      setManualHover(e.target === shield ? probeAt(e.clientX, e.clientY) : e.target);
+      // 之后在盾层内移动由 onShieldMove 持续探测；Ctrl 按下 = 严格签名预览
+      setManualHover(e.target === shield ? probeAt(e.clientX, e.clientY) : e.target,
+        e.ctrlKey || e.metaKey);
       return;
     }
     if (collapsed) return;
@@ -552,14 +575,15 @@
     if (manualMode) {
       e.preventDefault();
       e.stopPropagation();
-      if (el) collectToggle(el); // 传原始元素：列表识别需自点击处向上找
+      // 传原始元素：列表识别需自点击处向上找；Ctrl = 严格签名收同样式子集
+      if (el) collectToggle(el, e.ctrlKey || e.metaKey);
       return;
     }
     const entry = el && entryAt(el);
     if (entry) {
       e.preventDefault();
       e.stopPropagation();
-      toggleSelect(entry);
+      toggleSelect(entry, e.ctrlKey || e.metaKey); // Ctrl = 并入同一 Sheet 组
       return;
     }
     const link = el && el.closest('a[href]');
@@ -692,18 +716,20 @@
     return el;
   }
 
-  /** 盾层 mousemove：探测真实元素并吸附高亮（拖拽面板期间跳过防闪烁） */
+  /** 盾层 mousemove：探测真实元素并吸附高亮（拖拽面板期间跳过防闪烁；
+   *  Ctrl 按下时预览严格签名范围，与点击收集口径一致） */
   function onShieldMove(e) {
     if (!manualMode || dragInfo) return;
-    setManualHover(probeAt(e.clientX, e.clientY));
+    setManualHover(probeAt(e.clientX, e.clientY), e.ctrlKey || e.metaKey);
   }
 
   /** 收集模式悬浮吸附（页面直悬与盾层探测共用入口）：优先识别所在列表 →
-   *  整表紫色高亮——悬浮即昭示点击将收集的范围；无列表上下文回退单候选高亮 */
-  function setManualHover(el) {
+   *  整表紫色高亮——悬浮即昭示点击将收集的范围（strict=true 时按严格签名，
+   *  与 Ctrl+点击口径一致）；无列表上下文回退单候选高亮 */
+  function setManualHover(el, strict) {
     clearHoverBoxes();
     if (!(el instanceof Element)) { hoverTarget = null; return; }
-    const list = findContainingList(el);
+    const list = findContainingList(el, strict);
     if (list) {
       hoverTarget = { type: 'items', items: list.items };
       for (const it of list.items) if (it.isConnected) positionBox(takeBox(), it);
@@ -730,7 +756,7 @@
     setLiveBadge(entry, true);
     addBtn.classList.add('lde-on');
     addBtn.textContent = '完成收集';
-    setHint('点击列表中任一元素收集整个列表，再次点击移除（Esc 结束）', 'var(--c-info)');
+    setHint('点击列表中任一元素收集整个列表，再次点击移除；Ctrl+点击只收同样式条目（Esc 结束）', 'var(--c-info)');
   }
 
   function exitManual() {
@@ -761,35 +787,41 @@
     if (t) t.hidden = !on;
   }
 
-  /** 收集模式核心：点击元素 → findContainingList 识别所在列表（同签名兄弟 ≥2）
-   *  整表收集为独立条目；已收集同一列表（container 相同）→ 整表移除；
+  /** 收集模式核心：点击元素 → findContainingList 识别所在列表（真列表语义
+   *  整表 / 同签名兄弟 ≥2；strict=true 时跳过语义规则只按严格签名——
+   *  Ctrl+点击收同样式子集，如双列布局单收一列）整表收集为独立条目，
+   *  条目经 visualOrder 列优先重排（双列交错 DOM 序还原阅读顺序）；
+   *  同容器且条目与已有收集重叠的再次点击 → 整表移除（整表与严格子集
+   *  共用容器，toggle 键须含条目重叠判断，单比容器会误删另一子集）；
    *  与其他列表条目重叠 → 提示不动作；无列表上下文的独立元素 → 回退
    *  pickItem 吸附后单条累积（v1.1 行为，进活动列表） */
-  function collectToggle(el) {
+  function collectToggle(el, strict) {
     const entry = currentManual;
     if (!entry) return;
-    const list = findContainingList(el);
+    const list = findContainingList(el, strict);
     if (list) {
-      const same = entries.find(en => en.container === list.container);
+      const same = entries.find(en => en.container === list.container &&
+        list.items.some(it => en.items.includes(it)));
       if (same) { // 再次点击同列表任一元素：整表移除
         if (selected.has(same)) removeSelected(same);
         if (same.rowEl) same.rowEl.remove();
         const i = entries.indexOf(same);
         if (i >= 0) entries.splice(i, 1);
         syncEmpty();
-        setHint('已移除该列表（' + list.items.length + ' 条），继续点击或 Esc 结束', 'var(--c-info)');
+        setHint('已移除该列表（' + same.items.length + ' 条），继续点击或 Esc 结束', 'var(--c-info)');
         return;
       }
       if (list.items.some(it => entries.some(en => en.items.includes(it)))) {
         toast('所选列表的元素已在其他收集中', { type: 'info' });
         return;
       }
+      const items = visualOrder(list.items); // 列优先：预览/徽标/导出行序一致
       const en = {
         container: list.container,
-        items: list.items,
+        items: items,
         withLinks: false,
-        preview: previewOf(list.items),
-        full: firstItemText(list.items),
+        preview: previewOf(items),
+        full: firstItemText(items),
         rowEl: null,
         flashT: 0
       };
@@ -797,7 +829,7 @@
       syncEmpty();
       listEl.appendChild(buildRow(en));
       addSelected(en); // 收集即选中
-      setHint('已收集列表 ' + list.items.length + ' 条，再次点击任一元素移除', 'var(--c-info)');
+      setHint('已收集列表 ' + en.items.length + ' 条，再次点击任一元素移除', 'var(--c-info)');
       return;
     }
     const item = pickItem(el);
@@ -977,21 +1009,33 @@
     exportBtn.textContent = '导出中…';
     setHint('正在生成导出文件…', 'var(--c-info)');
     try {
-      // 1. 逐列表取数（导出时实时取元素文本，prune 期间不剔除）
+      // 1. 逐表取数（导出时实时取元素文本，prune 期间不剔除）：
+      //    按 Sheet 组聚合——Ctrl 并组（groupId 相同）的多条目拼接为同一个表，
+      //    组内行序 = 选择序；链接列口径 = 组内任一条目勾选「附链接」即有该列，
+      //    未勾选条目的行链接留空
+      const groups = [];
+      const byGid = new Map();
+      for (const en of list) {
+        let g = byGid.get(en.groupId);
+        if (!g) { g = []; byGid.set(en.groupId, g); groups.push(g); }
+        g.push(en);
+      }
       const tables = [];
       let i = 0;
-      for (const entry of list) {
+      for (const g of groups) {
         if (!active) return; // yield 间隙用户可能已退出，放弃导出
-        const rows = entry.items.map(el => ({
-          content: normalizeText(el.textContent),
-          link: entry.withLinks ? firstHref(el) : null
-        }));
-        tables.push({
-          name: makeListName(i++),
-          rows: rows,
-          withLinks: !!entry.withLinks
-        });
-        await yieldToMain(); // 每列表之间让出主线程：多列表导出期间页面不冻结
+        const withLinks = g.some(en => en.withLinks);
+        const rows = [];
+        for (const en of g) {
+          for (const el of en.items) {
+            rows.push({
+              content: normalizeText(el.textContent),
+              link: en.withLinks ? firstHref(el) : ''
+            });
+          }
+        }
+        tables.push({ name: makeListName(i++), rows: rows, withLinks: withLinks });
+        await yieldToMain(); // 每表之间让出主线程：多表导出期间页面不冻结
       }
 
       // 2. 按所选格式生成下载文件列表（CSV 多列表为多文件，其余单文件）

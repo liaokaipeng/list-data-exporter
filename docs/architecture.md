@@ -42,7 +42,7 @@
 | --------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | entry.js  | —    | 注入守卫 + `__lde` 命名空间                                                                                                                                                                                                      |
 | util.js   | —    | timestamp / sanitizeFilename / escapeHtml / normalizeText（视觉归一化）/ truncate / visualWidth（CJK 双宽）/ autoColWidths（列宽钳制 6~50）；纯函数，algo-check.cjs 离线回归                                                       |
-| detect.js | util | 手动收集辅助：`findContainingList()` 所在列表识别（自点击处向上找最近一级「同签名兄弟 ≥2」的祖先，签名 = tagName + 排序 class，见 `elSig()`，覆盖 a 包裹卡片网格 / div 伪列表）；`pickItem()` 单条回退时点击吸附候选（li 优先 → 行内 display:inline 向上到块级，body/html 除外）；`previewOf()/firstItemText()` 首条预览（Element[] 入参）；`makeListName()` 收集N 命名；elSig/预览/命名纯函数离线回归，findContainingList/pickItem 走浏览器回归 |
+| detect.js | util | 手动收集辅助：`findContainingList(el, strict)` 所在列表识别——真列表语义规则优先（cur 为 li 且父级 ul/ol → 条目 = 全部 li 子元素，odd/even 条纹类不拆列表；strict=true 跳过语义规则只按签名，Ctrl+点击收子集）；否则自点击处向上找最近一级「同签名兄弟 ≥2」的祖先（签名 = tagName + 排序 class，见 `elSig()`，覆盖 a 包裹卡片网格 / div 伪列表）；`orderFromRects()` 列优先视觉排序纯函数（x 区间重叠聚列、列间按 x 列内按 y，零尺寸排末尾）与 DOM 包装 `visualOrder()`（双列交错 DOM 序还原阅读顺序）；`pickItem()` 单条回退时点击吸附候选（li 优先 → 行内 display:inline 向上到块级，body/html 除外）；`previewOf()/firstItemText()` 首条预览（Element[] 入参）；`makeListName()` 收集N 命名；elSig/预览/命名/orderFromRects 纯函数离线回归，findContainingList/pickItem/visualOrder 走浏览器回归 |
 | format.js | util | 导出格式序列化纯函数：`toCsv()`（RFC4180+BOM+CRLF）/ `toJson()`（单列表行对象、多列表名键嵌套）/ `toMarkdown()`（GFM + 二级标题分区）/ `toHtmlDocument()`（完整文档）；数据模型 `{ name, rows:[{content,link}], withLinks }`；离线回归 |
 | main.js   | 其余全部 | 主 UI / 事件 / 收集模式 / 选中管理 / 导出 / 退出清理（详见下）                                                                                                                                                                   |
 
@@ -50,15 +50,15 @@
 
 - **UI/事件**：单个 Shadow DOM host（`all:initial` 隔离页面样式），含悬浮面板、高亮框池、选中覆盖层、toast 容器。`mouseover` 捕获：收集模式下高亮识别所在列表（整表）/独立候选（`setManualHover()`）；常规模式双向联动——悬浮页面已收集元素，面板对应条目 `scrollIntoView` + 短暂强调（`entryAt()` 自目标向上逐祖先查 items 归属）。`click` 捕获：收集模式拦截所有点击做整表/单条收集与移除；常规模式仅拦截已收集元素点选（选中/取消）与链接 `a[href]` 导航（就地红框 1s + 警示 toast），其余放行（翻页/筛选可用，`pruneDetached()` 剔除被替换的元素）。`keydown`：Esc 结束收集 / 退出会话；Enter 导出（焦点在面板控件或页面元素上时放行）。`scroll`/`resize` rAF 节流重定位
 
-- **收集模式**（v1.2 核心通道，无自动识别）：「添加选择」进入（每次进入新建单条收集列表 `currentManual`，行带「收集中」徽标，按钮变「完成收集」）；进入时挂载**采集盾**（`mountShield()`）——全屏透明层（`position:fixed; inset:0`，z-index 2147483646 仅低于面板宿主）接管所有指针命中：页面元素与任何层级的页面监听（含 window 捕获路由拦截器）看到的 target 均为盾层，无从触发跳转；真实目标经 `probeAt()`（瞬间摘掉盾层 `pointer-events` 后 `elementFromPoint`，同步恢复无闪烁）还原——盾层 `mousemove` 探测悬浮（`setManualHover()`：优先 `findContainingList()` 识别所在列表整表高亮，无列表回退 `pickItem()` 单候选），click 在 document 捕获中探测后 `collectToggle()`；面板在其上不受影响，wheel 放行滚动链到文档；Esc / 「完成收集」时 `unmountShield()` 摘除。`collectToggle()` 先 `findContainingList()`（自点击处向上最近一级「同签名兄弟 ≥2」的祖先，签名 = tagName + 排序 class）：命中 → 该组兄弟整表收集为独立条目（条目记录 `container`，同容器再次点击 = 整表移除，条目与其他列表重叠 → toast 不动作）；未命中（独立元素）→ `pickItem()` 吸附后单条累积进 `currentManual`（已在活动列表 → 移除序号重排，已在其他列表 → toast，否则追加）。收集即选中；空列表整行移除。数据模型：`{ items: Element[]（有序 = 导出行序）, container（整表条目的列表容器）, withLinks, preview, full, rowEl, flashT }`
+- **收集模式**（v1.2 核心通道，无自动识别）：「添加选择」进入（每次进入新建单条收集列表 `currentManual`，行带「收集中」徽标，按钮变「完成收集」）；进入时挂载**采集盾**（`mountShield()`）——全屏透明层（`position:fixed; inset:0`，z-index 2147483646 仅低于面板宿主）接管所有指针命中：页面元素与任何层级的页面监听（含 window 捕获路由拦截器）看到的 target 均为盾层，无从触发跳转；真实目标经 `probeAt()`（瞬间摘掉盾层 `pointer-events` 后 `elementFromPoint`，同步恢复无闪烁）还原——盾层 `mousemove` 探测悬浮（`setManualHover()`：优先 `findContainingList()` 识别所在列表整表高亮，无列表回退 `pickItem()` 单候选），click 在 document 捕获中探测后 `collectToggle()`；面板在其上不受影响，wheel 放行滚动链到文档；Esc / 「完成收集」时 `unmountShield()` 摘除。`collectToggle(el, strict)` 先 `findContainingList(el, strict)`（strict 来自 Ctrl+点击）：命中 → 该组条目经 `visualOrder()` 列优先重排后整表收集为独立条目（条目记录 `container`；同容器且条目重叠的再次点击 = 整表移除——整表与严格子集共用容器，toggle 键须含条目重叠判断；条目与其他列表重叠 → toast 不动作）；未命中（独立元素）→ `pickItem()` 吸附后单条累积进 `currentManual`（已在活动列表 → 移除序号重排，已在其他列表 → toast，否则追加）。收集即选中；空列表整行移除。数据模型：`{ items: Element[]（有序 = 导出行序，整表收集经 visualOrder 列优先重排）, container（整表条目的列表容器）, withLinks, preview, full, rowEl, flashT, groupId }`
 
 - **悬浮面板**：右侧默认贴边（360px，95vw/70vh 上限），标题栏 mousedown 拖拽（clamp 视口内）；图标再点 = 收起面板（会话保留，覆盖层与监听不动；收起前先结束收集模式），收起后再点 / Esc /「退出」= 全量清理；深色模式经 prefers-color-scheme 覆写 token；prefers-reduced-motion 关动效
 
 - **高亮框池**（`boxPool`）：面板条目悬浮 → 该列表全部已收集元素逐一紫色高亮框（`takeBox()` 复用池避免反复创建）；收集模式悬浮整表候选/单候选同风格；滚动/resize 经 `hoverTarget`（entry / items / el 三型）重算定位
 
-- **选中管理**：`selected` Set<列表对象>（保序 = 导出顺序）+ `overlays` Map<列表, box[]>（每元素一个覆盖层，徽标 = 列表内序号，贴视口边缘翻内侧；增删元素后 `rebuildOverlay()` 整体重建并重排）；面板行序号徽标已选 = 选中序号、未选 = 行序
+- **选中管理**：`selected` Set<列表对象>（保序 = 导出顺序）+ `overlays` Map<列表, box[]>（每元素一个覆盖层，徽标 = 列表内序号，贴视口边缘翻内侧；增删元素后 `rebuildOverlay()` 整体重建并重排）；面板行序号徽标已选 = Sheet 序号（同 `groupId` 并组条目同号，Ctrl 并组直观可见）、未选 = 行序；条目 `groupId` 在 `addSelected(entry, merge)` 分配——Ctrl+点击（merge=true）并入最近选中条目的组、否则新开一组，`removeSelected()` 置空脱离并组
 
-- **导出**：迭代前快照已选非空列表（yield 间隙的 prune 不影响导出范围）；逐列表实时取 `items` 的 textContent 归一化（可选 `firstHref()` 附链接列，元素自身或内部第一个 a）→ 按格式生成文件列表（xlsx 多 Sheet + `!cols` 列宽自适应；CSV 多列表拆多文件带列表名后缀；json/md/html 汇总单文件）→ 逐文件 base64 经后台 `chrome.downloads` 下载（失败回退 blob）；`yieldToMain()`（MessageChannel）逐列表让出主线程；导出中按钮「导出中…」防重入；成功保留面板（toast「退出」动作），可换格式连续导出
+- **导出**：迭代前快照已选非空列表（yield 间隙的 prune 不影响导出范围），按 `groupId` 聚合为表组——Ctrl 并组的多条目拼接为同一个表（组内行序 = 选择序；链接列口径 = 组内任一条目勾选「附链接」即有该列，未勾选条目的行链接留空）→ 逐表实时取 `items` 的 textContent 归一化（可选 `firstHref()` 附链接列，元素自身或内部第一个 a）→ 按格式生成文件列表（xlsx 多 Sheet + `!cols` 列宽自适应；CSV 多表拆多文件带列表名后缀；json/md/html 汇总单文件）→ 逐文件 base64 经后台 `chrome.downloads` 下载（失败回退 blob）；`yieldToMain()`（MessageChannel）逐表让出主线程；导出中按钮「导出中…」防重入；成功保留面板（toast「退出」动作），可换格式连续导出
 
 ## 关键设计决策
 
@@ -68,6 +68,10 @@
 | 按需注入而非静态 content_scripts | SheetJS 体积大，避免所有页面常驻开销；activeTab 权限利于商店审核 |
 | 手动收集为唯一通道（v1.1 取消自动识别） | 识别率不可控（门槛/伪列表/噪声列表），误识别比无识别更伤信任；用户点击所见即所得（整表/单条），收集范围完全由用户定义 |
 | 收集模式整表收集（同签名兄弟识别） | 点击列表中一个元素的意图几乎总是导出整个列表（如 Element Plus 总览卡片网格：`<a>` 包裹、无 ul/ol，自动识别覆盖不到）；同签名兄弟组（tagName + 排序 class）是最小可靠的「列表」信号，就近取最内层；悬浮整表高亮让范围先于点击可见，误判可整表移除当场撤销 |
+| 真列表语义规则（li 且父级 ul/ol → 全部 li 子元素为条目） | 严格同签名会把带 odd/even 条纹类的双列列表拆成两半（如百度热搜：一个 ul 10 个 li，DOM 交错序 + 条纹类，一次点击只收 5 条）；HTML 语义上 ul/ol 的 li 本就是一个列表的条目，样式类差异（条纹/首尾/选中态）不代表不同条目；该规则优先于签名匹配，Ctrl+点击（strict）可回退严格签名收子集（如单收一列） |
+| 整表收集列优先视觉排序（orderFromRects 聚列） | 双列交错布局的 DOM 序是视觉行序（0,5,1,6…），直接导出行序错乱；按矩形 x 区间重叠聚列、列间按 x 列内按 y，还原「左列自上而下再右列」的阅读顺序（排行榜类列表的正确序）；单列结果与 DOM 序一致无副作用；聚列逻辑抽为纯函数 orderFromRects 供离线回归 |
+| Ctrl 双语义（收集模式 = 严格子集，选择模式 = 并入同 Sheet） | 两个模式各有一个「合并/拆分」诉求：收集模式需要从整表识别回退严格签名（单收一列），选择模式需要把多个独立列表拼进一个 Sheet；Ctrl 是通用的「修饰主操作」键，按模式区分语义不冲突，且避免新增 UI 控件 |
+| Sheet 组（groupId）并组导出 | Ctrl 并组的多列表拼接为同一 Sheet 是「一个表一个 Sheet」需求的通解（任意 N 个列表按选择序拼接）；组键挂在条目上随选中生命周期分配/置空，导出时按组聚合，默认（每组一条目）行为与旧版完全一致 |
 | 点击吸附规则（单条回退路径）：li 优先 → 行内向上到块级 | 一刀切到 e.target 太碎（点 span 得 span）、切到固定祖先太粗；li 是页面语义上现成的「一条」；行内→块级符合「视觉上独立的一条」直觉；body/html 排除防全页选中 |
 | 整表条目以 container 元素为 toggle 键 | 同一列表的任一元素点击语义一致（整表收集/整表移除），无需比对条目集；DOM 结构性相等比对不可靠，容器引用同一即同列表 |
 | 每次进入收集模式新建列表 | 一次进出 = 一个语义完整的收集（如「这页商品」）；多次进出天然支持多列表多 Sheet 导出，无需额外 UI |
@@ -96,6 +100,10 @@
 - pickItem 的吸附规则是启发式（li / 行内→块级两级），复杂布局（绝对定位浮层、表格内 td）可能吸附到意料外的层级，用户可通过收集/移除即时纠正
 
 - findContainingList 就近取最内层同签名组：嵌套列表点击总是命中最内层；同标签同 class 兄弟 ≥2 即视为列表，粒度不可自定义（误判经再次点击整表移除撤销）；表格内点击会把同行同签名单元格识别为「列表」（表格场景建议用 web-table-exporter）
+
+- 真列表语义规则把 ul/ol 的全部 li 子元素视为一个列表：同 ul 内确实异质的 li（如导航里 li.home + li.item）也会整表收集，Ctrl+点击可回退严格签名收子集；div 伪列表的条纹类（odd/even）不做类合并——类相似度合并有误合并风险（如同容器内共享基类的不同部件），保持严格签名，误拆可经两次收集 + Ctrl 并组弥补
+
+- 列优先排序假设多列列表按列阅读（排行榜类）；横向平铺的卡片网格（阅读序为行优先）导出行序会变为列优先，如需原始顺序可逐列收集后并组
 
 - 事件闸（第二道防线）对早于本扩展注册的同节点同阶段（document 捕获）页面监听无效（先注册先执行）；采集盾为主防线不受此限，但被个别页面元素（z-index 高于 2147483646 的全屏浮层）盖住时命中回到页面元素，由事件闸兜底，window 级捕获监听仍可能漏拦（极端场景）
 

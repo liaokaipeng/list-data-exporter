@@ -52,6 +52,23 @@ ok(detect.firstItemText([]) === '', 'firstItemText 空列表');
 ok(detect.previewOf([{ textContent: 'x'.repeat(50) }]).length === 41, 'previewOf 截断 40 字符 + 省略号');
 ok(detect.previewOf([{ textContent: '  4722   PHP  ' }]) === '4722 PHP', 'previewOf 归一化首条');
 
+// orderFromRects：列优先视觉排序（双列交错 DOM 序还原阅读顺序）
+const rectL = t => ({ left: 0, right: 100, top: t, width: 100, height: 20 });   // 左列条目
+const rectR = t => ({ left: 120, right: 220, top: t, width: 100, height: 20 }); // 右列条目
+ok(JSON.stringify(detect.orderFromRects([])) === '[]', 'orderFromRects 空序列');
+ok(JSON.stringify(detect.orderFromRects([rectL(0)])) === '[0]', 'orderFromRects 单元素');
+ok(JSON.stringify(detect.orderFromRects([rectL(0), rectL(30)])) === '[0,1]', 'orderFromRects 单列保持原序');
+// 双列交错 DOM 序（0,5,1,6,2,7,3,8,4,9 → 左列 0-4 自上而下，再右列 5-9）
+const striped = [rectL(0), rectR(0), rectL(30), rectR(30), rectL(60), rectR(60), rectL(90), rectR(90), rectL(120), rectR(120)];
+ok(JSON.stringify(detect.orderFromRects(striped)) === JSON.stringify([0, 2, 4, 6, 8, 1, 3, 5, 7, 9]),
+  'orderFromRects 双列交错还原列优先序');
+// 零尺寸（display:none）不参与聚列，按原相对序排末尾
+ok(JSON.stringify(detect.orderFromRects([{ left: 0, right: 0, top: 0, width: 0, height: 0 }, rectL(0)])) === '[1,0]',
+  'orderFromRects 零尺寸排末尾');
+// 三列网格同样按列分组
+const grid = [rectL(0), { left: 240, right: 340, top: 0, width: 100, height: 20 }, rectR(0)];
+ok(JSON.stringify(detect.orderFromRects(grid)) === '[0,2,1]', 'orderFromRects 三列网格按 x 分列');
+
 /* ---------------- format ---------------- */
 
 const t1 = {
