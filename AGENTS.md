@@ -15,7 +15,7 @@ Chrome MV3 扩展（原生 JS，零构建）。架构与产品信息见 [docs/ar
 ## 验证命令（本机为 PowerShell）
 
 ```powershell
-# 内容脚本语法检查（5 个文件，依赖序注入，见 docs/architecture.md）
+# 内容脚本语法检查（6 个文件，依赖序注入，见 docs/architecture.md）
 Get-ChildItem extension/content/*.js | ForEach-Object { node --check $_.FullName }
 node --check extension/background/service-worker.js
 node test/algo-check.cjs

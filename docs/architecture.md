@@ -7,7 +7,7 @@
 │ 扩展图标     │ ─────────→ │ service-worker.js │ ─────────→ │ 页面 isolated    │
 │ (action)    │            │ (background)      │            │ world（仅顶层）  │
 └─────────────┘            └────────┬─────────┘            │ ├ xlsx.full.min  │
-                                    │ sendMessage          └ content/ 5 文件  │
+                                    │ sendMessage          └ content/ 6 文件  │
                                     ↓ (base64)             └────────┬────────┘
                            ┌──────────────────┐                     │
                            │ chrome.downloads │ ←───────────────────┘
@@ -28,13 +28,13 @@
 
 ### extension/background/service-worker.js
 
-- `chrome.action.onClicked`：向当前 tab 注入 `lib/xlsx.full.min.js` 与 `content/` 下 5 个文件（同一 isolated world，main.js 直接用全局 `XLSX`；路径相对 extension/ 根）
+- `chrome.action.onClicked`：向当前 tab 注入 `lib/xlsx.full.min.js` 与 `content/` 下 6 个文件（同一 isolated world，main.js 直接用全局 `XLSX`；路径相对 extension/ 根）
 
 - `chrome.runtime.onMessage`（`type: 'lde-download'`）：base64 数据（按 `msg.mime` 定 MIME，缺省 xlsx）经 `chrome.downloads.download` 落盘并回传结果
 
 - 受限页面（chrome:// 等）注入失败静默处理
 
-### extension/content/（5 文件按依赖拓扑序注入，每文件一个 IIFE 挂载到 window.__lde）
+### extension/content/（6 文件按依赖拓扑序注入，每文件一个 IIFE 挂载到 window.__lde）
 
 注入守卫（entry.js）：`window.__listDataExporter` 已存在 → 标记 `__lde.aborted` 并调上轮 `toggle()`（面板可见则收起、已收起则退出，本轮后续文件放弃初始化）；否则创建命名空间。零构建无 import/export，**注入顺序即依赖顺序**：
 
@@ -43,14 +43,17 @@
 | entry.js  | —    | 注入守卫 + `__lde` 命名空间                                                                                                                                                                                                      |
 | util.js   | —    | timestamp / sanitizeFilename / escapeHtml / normalizeText（视觉归一化）/ truncate / visualWidth（CJK 双宽）/ autoColWidths（列宽钳制 6~50）；纯函数，algo-check.cjs 离线回归                                                       |
 | detect.js | util | 手动收集辅助：`findContainingList(el, strict)` 所在列表识别——真列表语义规则优先（cur 为 li 且父级 ul/ol → 条目 = 全部 li 子元素，odd/even 条纹类不拆列表；strict=true 跳过语义规则只按签名，Ctrl+点击收子集）；否则自点击处向上找最近一级「同签名兄弟 ≥2」的祖先（签名 = tagName + 排序 class，见 `elSig()`，覆盖 a 包裹卡片网格 / div 伪列表）；`orderFromRects()` 列优先视觉排序纯函数（x 区间重叠聚列、列间按 x 列内按 y，零尺寸排末尾）与 DOM 包装 `visualOrder()`（双列交错 DOM 序还原阅读顺序）；`pickItem()` 单条回退时点击吸附候选（li 优先 → 行内 display:inline 向上到块级，body/html 除外）；`previewOf()/firstItemText()` 首条预览（Element[] 入参）；`makeListName()` 收集N 命名；elSig/预览/命名/orderFromRects 纯函数离线回归，findContainingList/pickItem/visualOrder 走浏览器回归 |
-| format.js | util | 导出格式序列化纯函数：`toCsv()`（RFC4180+BOM+CRLF）/ `toJson()`（单列表行对象、多列表名键嵌套）/ `toMarkdown()`（GFM + 二级标题分区）/ `toHtmlDocument()`（完整文档）；数据模型 `{ name, rows:[{content,link}], withLinks }`；离线回归 |
+| field.js  | util, detect | 字段提取（v1.4 多列导出核心）：字段 = `{ name, sel, alt, type, attr? }`（sel = 相对条目根的选择器，alt = 结构索引回退 {DFS 序号, elSig 签名, 深度, 父签名}，type = text/link/image/attr）。选择器生成优先**稳定锚点**：data-hook 等模板级属性（跨条目结构差异仍命中）→ 稳定 id → 语义 class → tag+nth；`fieldFromSample()` 手动点选：样本节点向上收集每步 → 生成多档候选（含「正文容器」候选：点正文段落自动上溯到多段正文容器取全文）→ 样本自检（普通候选要求 querySelector 命中点选节点本身、容器候选要求包含点选节点，防宽泛选择器命中祖先）→ 跨条目 `countHits()` 验证 → `pickBestSelector()` 择优；`describeItem()`/`suggestFromItems()` 自动识别：条目内内容节点 DFS 枚举（跳过隐藏子树：hidden/aria-hidden/display:none/计算样式，避免折叠提示文案污染；仅保留有直接文本或 IMG/A 载体节点）→ `suggestFields()` 跨条目结构对齐（同路径出现 ≥ max(2, 60%)，祖先无直接文本且有文本后代则丢弃，data-hook 值跨条目一致才作稳定锚点）→ 正文容器探测（data-hook 值含正文语义词 + 多段块级 + 文本最短，合并段落级候选为单一「正文」字段）；`guessFieldName()` 猜名（class/id/data-hook 语义词表 → 标签语义 → 文本形态 → 回退）；`nodeByIndex()` 结构索引兜底（同深度+同签名+同父签名强校验，宁留空不填错）；`extractCells()/buildTable()` 条目 → 单元格数组/整表（无字段定义 = 单列「内容」旧行为）；稳定 class/id 判定（排除 hash 串与状态类）、猜名、候选对齐、择优等纯函数离线回归，DOM 部分走浏览器回归 |
+| format.js | util | 导出格式序列化纯函数：`toCsv()`（RFC4180+BOM+CRLF）/ `toJson()`（单列表行对象、多列表名键嵌套）/ `toMarkdown()`（GFM + 二级标题分区）/ `toHtmlDocument()`（完整文档）；数据模型 `{ name, columns:[列名], rows:[[单元格]] }`（多列统一模型，列名来自字段定义或单列「内容」）；离线回归 |
 | main.js   | 其余全部 | 主 UI / 事件 / 收集模式 / 选中管理 / 导出 / 退出清理（详见下）                                                                                                                                                                   |
 
 ### main.js 关键机制
 
 - **UI/事件**：单个 Shadow DOM host（`all:initial` 隔离页面样式），含悬浮面板、高亮框池、选中覆盖层、toast 容器。`mouseover` 捕获：收集模式下高亮识别所在列表（整表）/独立候选（`setManualHover()`）；常规模式双向联动——悬浮页面已收集元素，面板对应条目 `scrollIntoView` + 短暂强调（`entryAt()` 自目标向上逐祖先查 items 归属）。`click` 捕获：收集模式拦截所有点击做整表/单条收集与移除；常规模式仅拦截已收集元素点选（选中/取消）与链接 `a[href]` 导航（就地红框 1s + 警示 toast），其余放行（翻页/筛选可用，`pruneDetached()` 剔除被替换的元素）。`keydown`：Esc 结束收集 / 退出会话；Enter 导出（焦点在面板控件或页面元素上时放行）。`scroll`/`resize` rAF 节流重定位
 
-- **收集模式**（v1.2 核心通道，无自动识别）：「添加选择」进入（每次进入新建单条收集列表 `currentManual`，行带「收集中」徽标，按钮变「完成收集」）；进入时挂载**采集盾**（`mountShield()`）——全屏透明层（`position:fixed; inset:0`，z-index 2147483646 仅低于面板宿主）接管所有指针命中：页面元素与任何层级的页面监听（含 window 捕获路由拦截器）看到的 target 均为盾层，无从触发跳转；真实目标经 `probeAt()`（瞬间摘掉盾层 `pointer-events` 后 `elementFromPoint`，同步恢复无闪烁）还原——盾层 `mousemove` 探测悬浮（`setManualHover()`：优先 `findContainingList()` 识别所在列表整表高亮，无列表回退 `pickItem()` 单候选），click 在 document 捕获中探测后 `collectToggle()`；面板在其上不受影响，wheel 放行滚动链到文档；Esc / 「完成收集」时 `unmountShield()` 摘除。`collectToggle(el, strict)` 先 `findContainingList(el, strict)`（strict 来自 Ctrl+点击）：命中 → 该组条目经 `visualOrder()` 列优先重排后整表收集为独立条目（条目记录 `container`；同容器且条目重叠的再次点击 = 整表移除——整表与严格子集共用容器，toggle 键须含条目重叠判断；条目与其他列表重叠 → toast 不动作）；未命中（独立元素）→ `pickItem()` 吸附后单条累积进 `currentManual`（已在活动列表 → 移除序号重排，已在其他列表 → toast，否则追加）。收集即选中；空列表整行移除。数据模型：`{ items: Element[]（有序 = 导出行序，整表收集经 visualOrder 列优先重排）, container（整表条目的列表容器）, withLinks, preview, full, rowEl, flashT, groupId }`
+- **收集模式**（v1.2 核心通道，无自动识别）：「添加选择」进入（每次进入新建单条收集列表 `currentManual`，行带「收集中」徽标，按钮变「完成收集」）；进入时挂载**采集盾**（`mountShield()`）——全屏透明层（`position:fixed; inset:0`，z-index 2147483646 仅低于面板宿主）接管所有指针命中：页面元素与任何层级的页面监听（含 window 捕获路由拦截器）看到的 target 均为盾层，无从触发跳转；真实目标经 `probeAt()`（瞬间摘掉盾层 `pointer-events` 后 `elementFromPoint`，同步恢复无闪烁）还原——盾层 `mousemove` 探测悬浮（`setManualHover()`：优先 `findContainingList()` 识别所在列表整表高亮，无列表回退 `pickItem()` 单候选），click 在 document 捕获中探测后 `collectToggle()`；面板在其上不受影响，wheel 放行滚动链到文档；Esc / 「完成收集」时 `unmountShield()` 摘除。`collectToggle(el, strict)` 先 `findContainingList(el, strict)`（strict 来自 Ctrl+点击）：命中 → 该组条目经 `visualOrder()` 列优先重排后整表收集为独立条目（条目记录 `container`；同容器且条目重叠的再次点击 = 整表移除——整表与严格子集共用容器，toggle 键须含条目重叠判断；条目与其他列表重叠 → toast 不动作）；未命中（独立元素）→ `pickItem()` 吸附后单条累积进 `currentManual`（已在活动列表 → 移除序号重排，已在其他列表 → toast，否则追加）。收集即选中；空列表整行移除。数据模型：`{ items: Element[]（有序 = 导出行序，整表收集经 visualOrder 列优先重排）, container（整表条目的列表容器）, fields（字段定义 Field[] | null）, preview, full, rowEl, flashT, groupId }`
+
+- **字段提取**（v1.4 多列导出）：列表行「字段」按钮 → 面板二级视图（覆盖内容区，`openFields()`），与收集模式互斥（共用采集盾）。两条产出路径：① **手动点选**——「＋ 点选」进入字段标注模式（`enterFieldMode()` 挂采集盾，悬浮高亮将提取的元素且仅限已收集条目内部），点击样本条目内节点 → `fieldFromSample()` 生成选择器并在全部条目上验证推广（失败 toast 引导换点）；② **自动识别**——`suggestFromItems()` 跨条目结构对齐出候选（追加到现有字段，用户可改名/删除，不静默替换）。字段行支持列名编辑、取值类型切换（文本/链接/图片）、命中率显示（命中数/条目数）、重选（↻ 定向替换该字段）、删除；预览表实时渲染前 5 行（`buildTable()`）。字段定义存于条目 `entry.fields`（null = 单列「内容」旧行为），随会话存在不持久化
 
 - **悬浮面板**：右侧默认贴边（360px，95vw/70vh 上限），标题栏 mousedown 拖拽（clamp 视口内）；图标再点 = 收起面板（会话保留，覆盖层与监听不动；收起前先结束收集模式），收起后再点 / Esc /「退出」= 全量清理；深色模式经 prefers-color-scheme 覆写 token；prefers-reduced-motion 关动效
 
@@ -58,7 +61,7 @@
 
 - **选中管理**：`selected` Set<列表对象>（保序 = 导出顺序）+ `overlays` Map<列表, box[]>（每元素一个覆盖层，徽标 = 列表内序号，贴视口边缘翻内侧；增删元素后 `rebuildOverlay()` 整体重建并重排）；面板行序号徽标已选 = Sheet 序号（同 `groupId` 并组条目同号，Ctrl 并组直观可见）、未选 = 行序；条目 `groupId` 在 `addSelected(entry, merge)` 分配——Ctrl+点击（merge=true）并入最近选中条目的组、否则新开一组，`removeSelected()` 置空脱离并组
 
-- **导出**：迭代前快照已选非空列表（yield 间隙的 prune 不影响导出范围），按 `groupId` 聚合为表组——Ctrl 并组的多条目拼接为同一个表（组内行序 = 选择序；链接列口径 = 组内任一条目勾选「附链接」即有该列，未勾选条目的行链接留空）→ 逐表实时取 `items` 的 textContent 归一化（可选 `firstHref()` 附链接列，元素自身或内部第一个 a）→ 按格式生成文件列表（xlsx 多 Sheet + `!cols` 列宽自适应；CSV 多表拆多文件带列表名后缀；json/md/html 汇总单文件）→ 逐文件 base64 经后台 `chrome.downloads` 下载（失败回退 blob）；`fileNamed()` 文件名长度钳制（默认名页面标题超 40 字符截断，导出时主体 ≤60 / 无后缀 ≤100 / 后缀 ≤40，`clampName()` 按码点截断防代理对半截断）；`yieldToMain()`（MessageChannel）逐表让出主线程；导出中按钮「导出中…」防重入；成功保留面板（toast「退出」动作），可换格式连续导出
+- **导出**：迭代前快照已选非空列表（yield 间隙的 prune 不影响导出范围），按 `groupId` 聚合为表组——Ctrl 并组的多条目拼接为同一个表（组内行序 = 选择序；组内任一条目定义了字段即按其字段拆列，并组各条目字段取并集，缺列留空）→ 逐表实时取值（无字段 = 元素 textContent 归一化单列；有字段 = `extractCells()` 按字段选择器取值、失效回退结构索引，未命中留空不丢行）→ 按格式生成文件列表（xlsx 多 Sheet + `!cols` 列宽自适应；CSV 多表拆多文件带列表名后缀；json/md/html 汇总单文件）→ 逐文件 base64 经后台 `chrome.downloads` 下载（失败回退 blob）；`fileNamed()` 文件名长度钳制（默认名页面标题超 40 字符截断，导出时主体 ≤60 / 无后缀 ≤100 / 后缀 ≤40，`clampName()` 按码点截断防代理对半截断）；`yieldToMain()`（MessageChannel）逐表让出主线程；导出中按钮「导出中…」防重入；成功保留面板（toast「退出」动作），可换格式连续导出
 
 ## 关键设计决策
 
@@ -104,6 +107,8 @@
 - 真列表语义规则把 ul/ol 的全部 li 子元素视为一个列表：同 ul 内确实异质的 li（如导航里 li.home + li.item）也会整表收集，Ctrl+点击可回退严格签名收子集；div 伪列表的条纹类（odd/even）不做类合并——类相似度合并有误合并风险（如同容器内共享基类的不同部件），保持严格签名，误拆可经两次收集 + Ctrl 并组弥补
 
 - 列优先排序假设多列列表按列阅读（排行榜类）；横向平铺的卡片网格（阅读序为行优先）导出行序会变为列优先，如需原始顺序可逐列收集后并组
+
+- 字段选择器基于收集时刻的 DOM 生成：页面 SPA 重渲染替换条目元素后，选择器可能失配（结构索引兜底按位置 + 签名取值，位置也变则该列留空）；导出前可在字段视图看预览与命中率确认
 
 - 事件闸（第二道防线）对早于本扩展注册的同节点同阶段（document 捕获）页面监听无效（先注册先执行）；采集盾为主防线不受此限，但被个别页面元素（z-index 高于 2147483646 的全屏浮层）盖住时命中回到页面元素，由事件闸兜底，window 级捕获监听仍可能漏拦（极端场景）
 

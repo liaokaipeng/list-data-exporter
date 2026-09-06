@@ -1,5 +1,6 @@
 # IDE / 工具生成
 .trae/
+.workbuddy/
 
 # 构建产物（扩展目录直接加载，无需提交打包文件）
 extension.zip

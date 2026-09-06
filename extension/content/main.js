@@ -3,6 +3,13 @@
  * 多列表多选导出（xlsx / csv / json / md / html，须最后注入）
  * 依赖 window.__lde 命名空间（entry / util / detect / format 先行注入）；
  * UI 层与算法层只经命名空间单向调用。
+ * v1.4 字段提取（多列导出）：
+ *   - 条目内部子信息可拆为多列：字段 = 列名 + 相对条目根的选择器（跨条目验证）
+ *     + 结构索引回退；取值类型 text / link / image
+ *   - 两条定义路径：手动点选（点样本条目内的元素，选择器自动推广到全部条目）
+ *     与自动识别（跨条目结构对齐出候选，用户勾选确认）；面板「字段」进入
+ *     二级视图（字段行编辑 + 前 5 行实时预览）
+ *   - 「附链接」独立开关移除：链接改为字段的一种取值类型
  * v1.3 交互增强：
  *   - 真列表语义收集：点击 ul/ol 内任一 li = 全部 li 整表收集（无视 odd/even
  *     条纹类；整表条目经 visualOrder 列优先重排——双列交错 DOM 序还原阅读顺序）；
@@ -26,9 +33,13 @@
   'use strict';
   const ns = window.__lde;
   if (!ns || ns.aborted) return; // 守卫已退出（再次点击图标 = 收起/退出），不初始化
-  const { timestamp, sanitizeFilename, normalizeText, autoColWidths } = ns.util;
+  const { timestamp, sanitizeFilename, normalizeText, autoColWidths, escapeHtml } = ns.util;
   const { pickItem, previewOf, firstItemText, makeListName, findContainingList, visualOrder } = ns.detect;
-  const { toCsv, toJson, toMarkdown, toHtmlDocument } = ns.format;
+  const { toCsv, toJson, toMarkdown, toHtmlDocument, headersOf } = ns.format;
+  const {
+    buildTable, columnsOf, extractCells, hitCounts, fieldFromSample,
+    suggestFromItems, pathToSelector, countHits
+  } = ns.field;
 
   // 导出格式注册表：label 为按钮文案、ext 为文件扩展名、mime 为下载 MIME
   const FORMATS = {
@@ -47,9 +58,13 @@
   let host = null;
   let panelEl = null, titleEl = null, countEl = null, hintEl = null, listEl = null;
   let nameInput = null, fmtSel = null, exportBtn = null, cancelBtn = null, addBtn = null;
+  let fvEl = null, fvTitleEl = null, fvFieldsEl = null, fvPvEl = null, fvPickBtn = null;
   let toastRoot = null;
   let collapsed = false;   // 图标再点：面板收起但选择会话保留
   let manualMode = false;  // 收集模式（点击页面元素逐条收集）
+  let fieldMode = false;   // 字段标注模式（点击条目内元素提取为字段）
+  let fvEntry = null;      // 字段视图当前编辑的收集列表（面板二级视图）
+  let fvRedo = -1;         // 待重选的字段序号（-1 = 新增）
   let exporting = false;   // 导出文件生成/编码进行中（防重入）
   let rafId = 0;
   let dragInfo = null;     // 标题栏拖拽状态
@@ -57,7 +72,9 @@
 
   // 收集列表数据模型：{ items: Element[]（有序 = 导出行序，整表收集经 visualOrder
   // 列优先重排）, container（整表收集的列表容器，同容器条目重叠点击 = 同一列表
-  // toggle；单条收集无）, withLinks, preview, full, rowEl, flashT, groupId }
+  // toggle；单条收集无）, fields: Field[]|null（字段定义，null = 单列「内容」；
+  // Field = { name, sel, alt, type }, sel 为相对条目根的选择器、alt 为结构索引
+  // 回退）, preview, full, rowEl, flashT, groupId }
   let entries = [];
   let currentManual = null;      // 收集模式中的活动列表（独立元素单条累积）
   const selected = new Set();    // 已选收集列表（Set 保序 = 导出顺序）
@@ -121,8 +138,6 @@
       '  .lde-n{flex:none;color:var(--c-text-3);font-size:12px;white-space:nowrap;}',
       '  .lde-tag{flex:none;padding:1px 6px;border-radius:4px;font-size:11px;line-height:1.5;background:var(--c-bg-2);color:var(--c-text-2);border:1px solid var(--c-border-2);white-space:nowrap;}',
       '  .lde-tag-live{color:var(--c-info);border-color:var(--c-info);background:transparent;}',  /* 收集中徽标 */
-      '  .lde-link{flex:none;display:inline-flex;align-items:center;gap:3px;color:var(--c-text-2);font-size:12px;cursor:pointer;white-space:nowrap;}',
-      '  .lde-link input{margin:0;accent-color:var(--c-primary);}',
       '  .lde-foot{padding:10px 12px;border-top:1px solid var(--c-border-2);display:flex;flex-direction:column;gap:8px;}',
       '  .lde-frow{display:flex;gap:8px;align-items:center;}',
       '  .lde-name{flex:1;min-width:0;padding:6px 10px;border:1px solid var(--c-border);border-radius:var(--r-s);font:13px/1.2 -apple-system,"Segoe UI",sans-serif;color:var(--c-text);outline:none;background:var(--c-input);box-sizing:border-box;}',
@@ -139,6 +154,30 @@
       '  .lde-add{background:var(--c-bg);color:var(--c-info);border:1px solid var(--c-info);padding:5px 12px;font-size:12px;}',
       '  .lde-add:hover:not(:disabled){filter:brightness(1.06);}',
       '  .lde-add.lde-on{background:var(--c-info);color:#fff;}',  /* 收集模式激活态 */
+      /* 列表行「字段」入口 */
+      '  .lde-fld{flex:none;padding:3px 8px;border:1px solid var(--c-border);border-radius:var(--r-s);background:var(--c-bg);color:var(--c-text-2);cursor:pointer;font:12px/1.4 -apple-system,"Segoe UI",sans-serif;white-space:nowrap;}',
+      '  .lde-fld:hover{border-color:var(--c-primary);color:var(--c-primary);}',
+      '  .lde-fld.lde-on{background:var(--c-primary);border-color:var(--c-primary);color:#fff;}',
+      /* 字段二级视图（覆盖面板内容区） */
+      '  .lde-fv{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--c-bg);border-radius:var(--r);z-index:3;}',
+      '  .lde-fv[hidden]{display:none;}',
+      '  .lde-fv-head{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--c-border-2);}',
+      '  .lde-fv-title{flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '  .lde-fv-body{flex:1;min-height:0;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:8px;}',
+      '  .lde-frow2{display:flex;align-items:center;gap:6px;}',
+      '  .lde-fname{flex:1;min-width:0;padding:4px 8px;border:1px solid var(--c-border);border-radius:var(--r-s);font:12px/1.4 -apple-system,"Segoe UI",sans-serif;color:var(--c-text);background:var(--c-input);outline:none;}',
+      '  .lde-fname:focus{border-color:var(--c-primary);}',
+      '  .lde-ftype{flex:none;padding:4px 6px;border:1px solid var(--c-border);border-radius:var(--r-s);font:12px/1.4 -apple-system,"Segoe UI",sans-serif;color:var(--c-text);background:var(--c-input);outline:none;cursor:pointer;}',
+      '  .lde-fhit{flex:none;min-width:42px;text-align:right;color:var(--c-text-3);font-size:11px;}',
+      '  .lde-fmini{flex:none;border:none;background:none;color:var(--c-text-3);cursor:pointer;font:13px/1 -apple-system,"Segoe UI",sans-serif;padding:0 2px;}',
+      '  .lde-fmini:hover{color:var(--c-primary);}',
+      '  .lde-fmini.lde-fdel:hover{color:var(--c-danger);}',
+      '  .lde-fv-foot{padding:8px 12px;border-top:1px solid var(--c-border-2);display:flex;gap:8px;align-items:center;}',
+      '  .lde-pvwrap{max-height:160px;overflow:auto;border:1px solid var(--c-border-2);border-radius:var(--r-s);}',
+      '  .lde-pv{width:100%;border-collapse:collapse;font-size:11px;}',
+      '  .lde-pv th,.lde-pv td{border:1px solid var(--c-border-2);padding:3px 6px;text-align:left;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '  .lde-pv th{background:var(--c-bg-2);color:var(--c-text-2);font-weight:500;}',
+      '  .lde-fv-tip{color:var(--c-text-3);font-size:11px;}',
       /* Toast（结果性通知，右上角独立堆叠） */
       '  .lde-toasts{position:fixed;top:16px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:2;pointer-events:none;font:13px/1.4 -apple-system,"Segoe UI",sans-serif;}',
       '  .lde-toast{pointer-events:auto;display:flex;align-items:center;gap:11px;max-width:min(460px,86vw);padding:11px 14px 11px 12px;border-radius:var(--r);background:var(--c-bg);color:var(--c-text);box-shadow:0 6px 24px rgba(0,0,0,.32);animation:lde-in .18s ease-out;border-left:4px solid var(--c-info);font-weight:600;}',
@@ -182,6 +221,23 @@
       '      <button type="button" class="lde-btn lde-ghost">取消 (Esc)</button>',
       '    </div>',
       '  </div>',
+      '  <div class="lde-fv" hidden>',
+      '    <div class="lde-fv-head">',
+      '      <button type="button" class="lde-mini lde-fv-back" title="返回列表">← 返回</button>',
+      '      <span class="lde-fv-title">字段</span>',
+      '      <button type="button" class="lde-mini lde-fv-auto" title="按各条目结构自动识别字段">自动识别</button>',
+      '    </div>',
+      '    <div class="lde-fv-body">',
+      '      <div class="lde-fv-fields"></div>',
+      '      <div class="lde-pvwrap"><table class="lde-pv"></table></div>',
+      '    </div>',
+      '    <div class="lde-fv-foot">',
+      '      <button type="button" class="lde-btn lde-add lde-fv-pick" title="点选页面条目内的元素，提取为一个字段">＋ 点选</button>',
+      '      <span class="lde-spacer"></span>',
+      '      <button type="button" class="lde-mini lde-fv-clear" title="清空字段（导出为单列内容）">清空</button>',
+      '      <button type="button" class="lde-btn lde-primary lde-fv-done">完成</button>',
+      '    </div>',
+      '  </div>',
       '</div>',
       '<div class="lde-toasts"></div>'
     ].join('');
@@ -197,6 +253,11 @@
     cancelBtn = root.querySelector('.lde-ghost');
     addBtn = root.querySelector('.lde-add');
     toastRoot = root.querySelector('.lde-toasts');
+    fvEl = root.querySelector('.lde-fv');
+    fvTitleEl = root.querySelector('.lde-fv-title');
+    fvFieldsEl = root.querySelector('.lde-fv-fields');
+    fvPvEl = root.querySelector('.lde-pv');
+    fvPickBtn = root.querySelector('.lde-fv-pick');
 
     exportBtn.addEventListener('click', doExport);
     cancelBtn.addEventListener('click', exit);
@@ -204,6 +265,15 @@
     addBtn.addEventListener('click', () => { manualMode ? exitManual() : enterManual(); });
     fmtSel.addEventListener('change', syncExportBtn);
     titleEl.addEventListener('mousedown', onDragStart);  // 标题栏拖拽（按钮除外）
+    fvPickBtn.addEventListener('click', () => { fieldMode ? exitFieldMode() : enterFieldMode(); });
+    root.querySelector('.lde-fv-back').addEventListener('click', closeFields);
+    root.querySelector('.lde-fv-done').addEventListener('click', closeFields);
+    root.querySelector('.lde-fv-auto').addEventListener('click', autoDetectFields);
+    root.querySelector('.lde-fv-clear').addEventListener('click', () => {
+      if (!fvEntry) return;
+      fvEntry.fields = null;
+      renderFields();
+    });
 
     nameInput.value = clampName(sanitizeFilename(document.title), 40) + '_' + timestamp();
   }
@@ -310,18 +380,14 @@
     const live = makeTag('收集中', 'lde-tag-live');
     live.hidden = true; // 收集模式中的活动列表经 setLiveBadge 显隐
     row.appendChild(live);
-    const lab = document.createElement('label');
-    lab.className = 'lde-link';
-    lab.title = '导出时每行追加元素内第一个链接的地址';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = !!entry.withLinks;
-    cb.addEventListener('click', e => e.stopPropagation());  // 勾选不触发行选中
-    cb.addEventListener('change', () => { entry.withLinks = cb.checked; });
-    lab.appendChild(cb);
-    lab.appendChild(document.createTextNode('附链接'));
-    lab.addEventListener('click', e => e.stopPropagation());
-    row.appendChild(lab);
+    // 字段入口：打开二级视图定义导出列（点击不触发行选中）
+    const fld = document.createElement('button');
+    fld.type = 'button';
+    fld.className = 'lde-fld';
+    fld.title = '提取条目内的字段（标题/日期/正文…）导出为多列';
+    fld.addEventListener('click', e => { e.stopPropagation(); openFields(entry); });
+    row.appendChild(fld);
+    syncFieldBtn(entry);
     row.addEventListener('mouseenter', () => onRowHover(entry));
     row.addEventListener('mouseleave', clearHover);
     row.addEventListener('click', e => toggleSelect(entry, e.ctrlKey || e.metaKey));
@@ -354,6 +420,200 @@
     } else if (empty) {
       empty.remove();
     }
+  }
+
+  /* ---------------- 字段视图（条目内部子信息 → 导出多列） ---------------- */
+
+  /** 打开字段二级视图（与收集模式互斥：两者都要占用采集盾） */
+  function openFields(entry) {
+    if (!entry) return;
+    if (manualMode) exitManual();
+    fvEntry = entry;
+    fvTitleEl.textContent = '字段 · ' + entry.items.length + ' 条';
+    fvEl.hidden = false;
+    renderFields();
+    setHint('点「＋ 点选」后点击条目内的内容，或用「自动识别」出候选字段', 'var(--c-info)');
+  }
+
+  function closeFields() {
+    exitFieldMode();
+    fvEntry = null;
+    fvEl.hidden = true;
+    resetHint();
+  }
+
+  /** 字段行 + 预览表重绘（增/删/改名/改类型后统一走这里） */
+  function renderFields() {
+    const entry = fvEntry;
+    if (!entry) return;
+    fvFieldsEl.textContent = '';
+    const fields = entry.fields || [];
+    if (!fields.length) {
+      const tip = document.createElement('div');
+      tip.className = 'lde-fv-tip';
+      tip.textContent = '未定义字段：导出为单列「内容」';
+      fvFieldsEl.appendChild(tip);
+    }
+    const items = entry.items.filter(el => el.isConnected);
+    const hits = hitCounts(items, fields);
+    fields.forEach((f, i) => {
+      fvFieldsEl.appendChild(buildFieldRow(entry, f, i, hits[i] || 0, items.length));
+    });
+    renderPreview(entry);
+    syncFieldBtn(entry);
+  }
+
+  /** 单个字段行：序号 / 列名（可编辑）/ 取值类型 / 命中率 / 重选 / 删除 */
+  function buildFieldRow(entry, f, i, hit, total) {
+    const row = document.createElement('div');
+    row.className = 'lde-frow2';
+    const idx = document.createElement('span');
+    idx.className = 'lde-idx';
+    idx.textContent = String(i + 1);
+    const name = document.createElement('input');
+    name.className = 'lde-fname';
+    name.type = 'text';
+    name.spellcheck = false;
+    name.value = f.name;
+    name.title = '导出列名';
+    name.addEventListener('input', () => {
+      f.name = name.value.trim() || ('字段' + (i + 1));
+      renderPreview(entry);
+    });
+    const type = document.createElement('select');
+    type.className = 'lde-ftype';
+    type.title = '取值类型';
+    [['text', '文本'], ['link', '链接'], ['image', '图片']].forEach(pair => {
+      const o = document.createElement('option');
+      o.value = pair[0];
+      o.textContent = pair[1];
+      if (f.type === pair[0]) o.selected = true;
+      type.appendChild(o);
+    });
+    type.addEventListener('change', () => { f.type = type.value; renderPreview(entry); });
+    const hits = document.createElement('span');
+    hits.className = 'lde-fhit';
+    hits.textContent = hit + '/' + total;
+    hits.title = '命中条目数 / 条目总数（未命中行该列留空）';
+    const redo = document.createElement('button');
+    redo.type = 'button';
+    redo.className = 'lde-fmini';
+    redo.textContent = '↻';
+    redo.title = '重新点选该字段';
+    redo.addEventListener('click', () => { fvRedo = i; enterFieldMode(); });
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'lde-fmini lde-fdel';
+    del.textContent = '×';
+    del.title = '删除该字段';
+    del.addEventListener('click', () => {
+      entry.fields.splice(i, 1);
+      if (!entry.fields.length) entry.fields = null;
+      renderFields();
+    });
+    row.appendChild(idx);
+    row.appendChild(name);
+    row.appendChild(type);
+    row.appendChild(hits);
+    row.appendChild(redo);
+    row.appendChild(del);
+    return row;
+  }
+
+  /** 预览表：前 5 行 × 字段列（改字段名/类型即时可见，避免导出后才发现切错） */
+  function renderPreview(entry) {
+    const items = entry.items.filter(el => el.isConnected).slice(0, 5);
+    const t = buildTable(items, entry.fields);
+    let html = '<thead><tr>' +
+      t.columns.map(c => '<th>' + escapeHtml(c) + '</th>').join('') + '</tr></thead><tbody>';
+    for (const r of t.rows) {
+      html += '<tr>' + r.map(v => '<td>' + escapeHtml(v) + '</td>').join('') + '</tr>';
+    }
+    fvPvEl.innerHTML = html + '</tbody>';
+  }
+
+  /** 列表行「字段」按钮文案：已定义字段数（未定义 = 单列内容） */
+  function syncFieldBtn(entry) {
+    if (!entry || !entry.rowEl) return;
+    const b = entry.rowEl.querySelector('.lde-fld');
+    if (!b) return;
+    const n = (entry.fields || []).length;
+    b.textContent = n ? '字段 · ' + n : '字段';
+    b.classList.toggle('lde-on', n > 0);
+  }
+
+  /** 字段标注模式：挂载采集盾，点击页面条目内的元素即提取为一个字段 */
+  function enterFieldMode() {
+    if (fieldMode || !fvEntry) return;
+    fieldMode = true;
+    mountShield();
+    clearHover();
+    fvPickBtn.classList.add('lde-on');
+    fvPickBtn.textContent = '完成点选';
+    setHint('点击条目内要提取的内容（标题/日期/正文…），Esc 结束', 'var(--c-info)');
+  }
+
+  function exitFieldMode() {
+    if (!fieldMode) return;
+    fieldMode = false;
+    unmountShield();
+    clearHover();
+    fvRedo = -1;
+    fvPickBtn.classList.remove('lde-on');
+    fvPickBtn.textContent = '＋ 点选';
+    setHint('字段已就绪，点「完成」返回列表', 'var(--c-info)');
+  }
+
+  /** 字段模式悬浮：高亮将提取的元素（越出条目范围则不高亮） */
+  function setFieldHover(el) {
+    clearHoverBoxes();
+    if (!fvEntry || !(el instanceof Element)) { hoverTarget = null; return; }
+    const item = fvEntry.items.find(it => it === el || it.contains(el));
+    if (!item || item === el) { hoverTarget = null; return; }
+    hoverTarget = { type: 'el', el: el };
+    positionBox(takeBox(), el);
+  }
+
+  /** 字段模式点击：在样本条目上点选的节点 → 生成选择器 → 推广到全部条目 */
+  function onFieldPick(el) {
+    const entry = fvEntry;
+    if (!entry) return;
+    const item = entry.items.find(it => it === el || it.contains(el));
+    if (!item) { toast('请在已收集的条目内点选内容', { type: 'warn' }); return; }
+    if (item === el) { toast('请点击条目内部的具体内容（如标题、日期）', { type: 'warn' }); return; }
+    const items = entry.items.filter(x => x.isConnected);
+    const fields = entry.fields || [];
+    const f = fieldFromSample(items, item, el, fields.map(x => x.name));
+    if (!f) { toast('该内容在其他条目上定位不到，请换一个', { type: 'warn' }); return; }
+    if (fvRedo >= 0 && fvRedo < fields.length) fields[fvRedo] = f;
+    else fields.push(f);
+    entry.fields = fields;
+    fvRedo = -1;
+    renderFields();
+    setHint('已添加字段「' + f.name + '」，继续点击或 Esc 结束', 'var(--c-info)');
+  }
+
+  /** 自动识别字段：跨条目结构对齐出候选（追加到现有字段后，用户可改名/删除） */
+  function autoDetectFields() {
+    const entry = fvEntry;
+    if (!entry) return;
+    const items = entry.items.filter(el => el.isConnected);
+    if (!items.length) { toast('该列表暂无数据', { type: 'info' }); return; }
+    const used = (entry.fields || []).map(f => f.name);
+    const cands = suggestFromItems(items, { used: used, limit: 8 });
+    if (!cands.length) { toast('未识别出可拆分的字段，可手动点选', { type: 'info' }); return; }
+    const fields = entry.fields || [];
+    for (const c of cands) {
+      fields.push({
+        name: c.name,
+        sel: c.hook ? '[data-hook="' + c.hook + '"]' : pathToSelector(c.path),
+        alt: (c.order != null ? { order: c.order, sig: c.sig, depth: c.depth, parentSig: c.parentSig } : null),
+        type: 'text'
+      });
+    }
+    entry.fields = fields;
+    renderFields();
+    toast('已识别 ' + cands.length + ' 个字段，确认后导出', { type: 'success' });
   }
 
   /** 由页面元素反查所属收集列表：自目标向上找（点已收集元素的内部也能命中） */
@@ -475,6 +735,7 @@
       if (!entry.items.length && entry !== currentManual) {
         // 非活动空列表：连同行一起移除
         if (selected.has(entry)) removeSelected(entry);
+        if (fvEntry === entry) closeFields();  // 正在编辑字段的列表被移除 → 关视图
         if (entry.rowEl) entry.rowEl.remove();
         const i = entries.indexOf(entry);
         if (i >= 0) entries.splice(i, 1);
@@ -535,7 +796,12 @@
    *  常规模式下双向联动——悬浮已收集元素，面板对应条目滚入视野并短暂强调 */
   function onPageOver(e) {
     if (!active || !(e.target instanceof Element)) return;
-    if (e.composedPath().includes(host)) { if (manualMode) clearHover(); return; }
+    if (e.composedPath().includes(host)) { if (manualMode || fieldMode) clearHover(); return; }
+    if (fieldMode) {
+      // 字段标注模式：悬浮高亮将提取的元素（越出条目范围不高亮）
+      setFieldHover(e.target === shield ? probeAt(e.clientX, e.clientY) : e.target);
+      return;
+    }
     if (manualMode) {
       // 盾层为命中目标（进盾瞬间触发一次）→ 坐标探测还原真实元素；
       // 之后在盾层内移动由 onShieldMove 持续探测；Ctrl 按下 = 严格签名预览
@@ -572,6 +838,12 @@
     // 盾层为命中目标时经坐标探测还原真实页面元素，收集行为与直点一致
     const el = (e.target === shield) ? probeAt(e.clientX, e.clientY)
       : (e.target instanceof Element ? e.target : null);
+    if (fieldMode) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (el) onFieldPick(el);
+      return;
+    }
     if (manualMode) {
       e.preventDefault();
       e.stopPropagation();
@@ -619,7 +891,7 @@
    *  preventDefault 顺带抑制文本选择/原生拖拽，点击收集更稳。
    *  面板自身事件放行（拖拽收尾含松开在页面上的场景，先于拦截处理） */
   function onPageGuard(e) {
-    if (!active || !manualMode) return;
+    if (!active || (!manualMode && !fieldMode)) return;
     if (dragInfo) onDragEnd(); // 拖拽中松开（含松开在页面上）：先结束拖拽再拦事件
     if (e.composedPath().includes(host)) return; // 面板自身不拦
     e.preventDefault();
@@ -631,12 +903,15 @@
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      if (manualMode) exitManual(); // 收集模式：Esc 结束收集，不退出会话
+      // 由内向外：字段标注 → 字段视图 → 收集模式 → 退出会话
+      if (fieldMode) exitFieldMode();
+      else if (fvEntry) closeFields();
+      else if (manualMode) exitManual(); // 收集模式：Esc 结束收集，不退出会话
       else exit();
       return;
     }
     if (e.key === 'Enter' && !e.isComposing) {
-      if (manualMode) {
+      if (manualMode || fieldMode) {
         // 收集模式：拦页面侧 Enter（防表单提交/链接键盘激活跳转），面板内控件放行
         if (host.contains(document.activeElement)) return;
         e.preventDefault();
@@ -644,6 +919,7 @@
         return;
       }
       if (exporting) return;
+      if (fvEntry) return; // 字段视图打开时 Enter 不触发导出（焦点在列名输入框上）
       // 焦点在面板输入框/按钮/下拉上时走默认行为；页面元素持焦时放行给页面
       const focused = host.shadowRoot && host.shadowRoot.activeElement;
       if (focused && (focused.tagName === 'BUTTON' || focused.tagName === 'INPUT' || focused.tagName === 'SELECT')) return;
@@ -748,7 +1024,7 @@
     mountShield(); // 先挂盾再清悬浮：此后悬浮高亮一律走盾层探测
     clearHover();
     // 每次进入收集模式新建一个列表（可多次进出建立多个收集列表）
-    const entry = { items: [], withLinks: false, preview: '', full: '', rowEl: null, flashT: 0 };
+    const entry = { items: [], fields: null, preview: '', full: '', rowEl: null, flashT: 0 };
     entries.push(entry);
     currentManual = entry;
     syncEmpty();
@@ -804,6 +1080,7 @@
         list.items.some(it => en.items.includes(it)));
       if (same) { // 再次点击同列表任一元素：整表移除
         if (selected.has(same)) removeSelected(same);
+        if (fvEntry === same) closeFields();  // 正在编辑字段的列表被移除 → 关视图
         if (same.rowEl) same.rowEl.remove();
         const i = entries.indexOf(same);
         if (i >= 0) entries.splice(i, 1);
@@ -819,7 +1096,7 @@
       const en = {
         container: list.container,
         items: items,
-        withLinks: false,
+        fields: null,
         preview: previewOf(items),
         full: firstItemText(items),
         rowEl: null,
@@ -922,10 +1199,15 @@
     });
   }
 
-  /** 元素自身或内部第一个 <a> 的绝对地址（无则空串） */
-  function firstHref(el) {
-    const a = el.matches('a[href]') ? el : el.querySelector('a[href]');
-    return a ? a.href : '';
+  /** 条目 → 按并集列序取值的行数组：无字段定义 = 单列「内容」（整元素文本）；
+   *  有字段定义 = 各字段值（并集中本条目没有的列名留空） */
+  function rowFor(entry, el, columns) {
+    const cells = extractCells(el, entry.fields);
+    const names = columnsOf(entry.fields);
+    return columns.map((c) => {
+      const i = names.indexOf(c);
+      return i >= 0 ? (cells[i] || '') : '';
+    });
   }
 
   /** 文件名长度钳制：按 Unicode 码点截断（防代理对被切成乱码） */
@@ -948,10 +1230,8 @@
     const fmt = FORMATS.xlsx;
     const wb = XLSX.utils.book_new();
     for (const t of tables) {
-      const aoa = [t.withLinks ? ['内容', '链接'] : ['内容']];
-      for (const r of t.rows) {
-        aoa.push(t.withLinks ? [r.content, r.link || ''] : [r.content]);
-      }
+      const aoa = [headersOf(t)]; // 表头 = 列名（无字段定义 = 单列「内容」）
+      for (const r of t.rows) aoa.push(r);
       const ws = XLSX.utils.aoa_to_sheet(aoa);
       ws['!cols'] = autoColWidths(aoa); // 列宽随内容自适应（中文双宽估算，钳制 6~50）
       XLSX.utils.book_append_sheet(wb, ws, t.name);
@@ -1016,10 +1296,10 @@
     exportBtn.textContent = '导出中…';
     setHint('正在生成导出文件…', 'var(--c-info)');
     try {
-      // 1. 逐表取数（导出时实时取元素文本，prune 期间不剔除）：
+      // 1. 逐表取数（导出时实时取元素文本/字段值，prune 期间不剔除）：
       //    按 Sheet 组聚合——Ctrl 并组（groupId 相同）的多条目拼接为同一个表，
-      //    组内行序 = 选择序；链接列口径 = 组内任一条目勾选「附链接」即有该列，
-      //    未勾选条目的行链接留空
+      //    组内行序 = 选择序；组内列 = 各条目字段名的并集（按选择序），
+      //    未定义该列的条目留空（未定义字段的条目以单列「内容」参与并集）
       const groups = [];
       const byGid = new Map();
       for (const en of list) {
@@ -1031,17 +1311,15 @@
       let i = 0;
       for (const g of groups) {
         if (!active) return; // yield 间隙用户可能已退出，放弃导出
-        const withLinks = g.some(en => en.withLinks);
+        const columns = [];
+        for (const en of g) {
+          for (const c of columnsOf(en.fields)) if (!columns.includes(c)) columns.push(c);
+        }
         const rows = [];
         for (const en of g) {
-          for (const el of en.items) {
-            rows.push({
-              content: normalizeText(el.textContent),
-              link: en.withLinks ? firstHref(el) : ''
-            });
-          }
+          for (const el of en.items) rows.push(rowFor(en, el, columns));
         }
-        tables.push({ name: makeListName(i++), rows: rows, withLinks: withLinks });
+        tables.push({ name: makeListName(i++), columns: columns, rows: rows });
         await yieldToMain(); // 每表之间让出主线程：多表导出期间页面不冻结
       }
 
@@ -1081,6 +1359,7 @@
   /** 图标再点语义：面板可见 → 收起（选择会话保留）；已收起 → 退出 */
   function collapse() {
     if (collapsed) return;
+    if (fvEntry) closeFields();    // 字段视图需面板可见，收起前关闭
     if (manualMode) exitManual(); // 面板收起后无法继续收集，先结束活动列表
     collapsed = true;
     panelEl.style.display = 'none';
@@ -1091,6 +1370,8 @@
     if (!active) return;
     active = false;
     manualMode = false;
+    fieldMode = false;
+    fvEntry = null;
     collapsed = false;
     unmountShield(); // 兜底：异常路径退出时确保摘除
     document.removeEventListener('mouseover', onPageOver, true);

@@ -14,6 +14,14 @@
   #striped { list-style: none; padding: 0; margin: 0; width: 560px; overflow: auto; }
   #striped li { float: left; width: 260px; height: 28px; line-height: 28px; border-bottom: 1px solid #f0f0f0; }
   #striped li.odd { margin-right: 40px; }
+  /* 字段提取验证：评论条目（作者 / 日期 / 标题 / 正文 / 链接 / 点赞） */
+  #field-comments { list-style: none; padding: 0; margin: 0; }
+  .cmt { border-bottom: 1px solid #eee; padding: 8px 0; }
+  .cmt h3 { margin: 2px 0; font-size: 14px; }
+  .cmt p { margin: 2px 0; }
+  .cmt-author { font-weight: 700; margin-right: 6px; }
+  .cmt-date { color: #999; font-size: 12px; margin-right: 6px; }
+  .cmt-like { color: #7c3aed; font-size: 12px; margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -34,7 +42,8 @@
 </section>
 
 <!-- 预期：收集模式下点击任一 li 内部（含链接文字）→ 整个 ul 的 10 个 li 整表收集为 10 行；
-     再次点击任一 li → 整表移除；勾选「附链接」导出，链接列 = 各 li 内第一个 a 的绝对地址 -->
+     再次点击任一 li → 整表移除；需导出链接列时：面板该行「字段」→「＋ 点选」→ 点击 li 内
+     的链接文字（类型自动为「链接」）→ 导出多出一列链接（各 li 内 a 的绝对地址） -->
 <section>
   <h2>评论列表（li 吸附验证，10 条）</h2>
   <ul id="comments">
@@ -76,8 +85,81 @@
   </ul>
 </section>
 
-<!-- 预期：5 个 p 无 class 同签名 → 点击任一段（含其内行内 span）整表收集 5 条，再次点击整表移除；
-     导出内容 = 各段文本归一化（「4722 PHP 币种已合并」等，行内 span 折叠进所在 p） -->
+<!-- 预期（字段提取 v1.4，多列导出）：
+     ① 收集模式点击任一 li → 5 条评论整表收集；面板该行「字段」→「自动识别」
+        → 识别出 6 个字段：作者 / 日期 / 标题 / 正文 / 链接 / 点赞（列序 = 条目内阅读顺序），
+        每行显示命中率 5/5，下方预览表显示前 5 行 × 6 列
+     ② 「＋ 点选」→ 点击任一条评论内的元素（如作者名）→ 新增字段并自动推广到全部 5 条
+        （选择器跨条目验证：命中率高者胜出；hash class 站点回退结构索引）
+     ③ 字段名可直接改（如「点赞」→「点赞数」）；类型下拉可切文本/链接/图片；× 删除字段；
+        「清空」= 回到单列「内容」
+     ④ 导出 xlsx/csv/json/md/html 均为多列（表头 = 字段名，一行一条目，缺失留空） -->
+<section>
+  <h2>字段提取验证（评论，5 条）</h2>
+  <ul id="field-comments">
+    <li class="cmt">
+      <span class="cmt-author">张三</span>
+      <time class="cmt-date">2026-03-12</time>
+      <h3 class="cmt-title">降噪效果超出预期</h3>
+      <p class="cmt-body">通勤地铁上几乎听不到噪音，续航也够用。</p>
+      <a class="cmt-link" href="https://example.com/review/1">查看原文</a>
+      <span class="cmt-like">128 赞</span>
+    </li>
+    <li class="cmt">
+      <span class="cmt-author">李四</span>
+      <time class="cmt-date">2026-03-13</time>
+      <h3 class="cmt-title">键盘手感偏硬</h3>
+      <p class="cmt-body">红轴更合适，茶轴长时间打字略累。</p>
+      <a class="cmt-link" href="https://example.com/review/2">查看原文</a>
+      <span class="cmt-like">64 赞</span>
+    </li>
+    <li class="cmt">
+      <span class="cmt-author">王五</span>
+      <time class="cmt-date">2026-03-14</time>
+      <h3 class="cmt-title">显示器色彩准确</h3>
+      <p class="cmt-body">出厂校色报告齐全，接笔记本一线连很方便。</p>
+      <a class="cmt-link" href="https://example.com/review/3">查看原文</a>
+      <span class="cmt-like">256 赞</span>
+    </li>
+    <li class="cmt">
+      <span class="cmt-author">赵六</span>
+      <time class="cmt-date">2026-03-15</time>
+      <h3 class="cmt-title">椅子腰托可调节</h3>
+      <p class="cmt-body">久坐八小时腰不酸，网布夏天不闷。</p>
+      <a class="cmt-link" href="https://example.com/review/4">查看原文</a>
+      <span class="cmt-like">89 赞</span>
+    </li>
+    <li class="cmt">
+      <span class="cmt-author">孙七</span>
+      <time class="cmt-date">2026-03-16</time>
+      <h3 class="cmt-title">升降桌安装略费时</h3>
+      <p class="cmt-body">两个人配合约一小时，升降很稳不晃。</p>
+      <a class="cmt-link" href="https://example.com/review/5">查看原文</a>
+      <span class="cmt-like">37 赞</span>
+    </li>
+  </ul>
+</section>
+
+<!-- 预期（字段提取 v1.4 · 深层嵌套回归，源自 Amazon 评论真实结构）：
+     条目直接子是包裹整条评论的 span 容器（内含 a[href]），内容节点埋在十余层
+     嵌套深处，且夹有隐藏 teaser 文本（display:none 的 a-hidden 提示文案）。
+     ① 整表收集后「自动识别」→ 识别出 名称 / 图标 / 标题 / 日期 / 有用数 /
+        正文 等字段；标题、日期、有用数、正文经 data-hook 稳定锚点生成选择器
+        （[data-hook="reviewTitle"] 等），跨条目结构差异仍命中；隐藏 teaser 文本
+        不产生候选；「正文」= reviewRichContentContainer 整段（多段正文合并为
+        单一字段，第一条两段都在，不再有单独的「首段」字段）
+     ② 「＋ 点选」点击正文段落文字 → 取值 = 该段正文文本，
+        不是整条评论的大杂烩文本（样本自检防退化选择器命中包裹容器）
+     ③ 三个条目嵌套层级有差异（条目 2/3 少一层 avatar 包裹）→
+        有 data-hook 的字段靠锚点稳定命中；无锚点的（作者名）经结构索引兜底 -->
+<section>
+  <h2>字段提取验证（深层嵌套评论，3 条）</h2>
+  <ul id="field-deep">
+    <li><span class="a-list-item"><div data-hook="reviewContainer"><div data-hook="review" class="a-section aok-relative"><div data-hook="genome-widget" class="a-row a-spacing-mini"><a href="/gp/profile/A" class="a-profile"><div class="a-profile-content"><span class="a-profile-name">John Doe</span></div></a></div><div><i class="a-icon a-icon-star"><span class="a-icon-alt">5 out of 5 stars</span></i></div><a class="a-link-normal" href="/portal/R1"><h5 data-hook="reviewTitle">Works great with demanding games</h5></a><div><span data-hook="review-date">Reviewed in the United States on May 23, 2026</span></div><div data-hook="reviewText"><div class="a-teaser-describedby-collapsed a-hidden" style="display:none">Brief content visible, double tap to read full content.</div><div class="a-teaser-describedby-expanded a-hidden" style="display:none">Full content visible, double tap to read brief content.</div><div><div><div><div><div data-hook="reviewRichContentContainer"><p><span>Just got it and updated the bios and drivers, great performance so far! The screen is very clear and bright.</span></p><p><span>The cooling system is discreet and quiet.</span></p></div></div></div></div></div></div></div><div><span data-hook="helpful-vote-statement">24 people found this helpful</span></div></div></span></li>
+    <li><span class="a-list-item"><div data-hook="reviewContainer"><div data-hook="review" class="a-section aok-relative"><div data-hook="genome-widget" class="a-row a-spacing-mini"><a href="/gp/profile/B" class="a-profile"><div class="a-profile-content"><span class="a-profile-name">Jane Smith</span></div></a></div><div><i class="a-icon a-icon-star"><span class="a-icon-alt">4 out of 5 stars</span></i></div><a class="a-link-normal" href="/portal/R2"><h5 data-hook="reviewTitle">Good value overall</h5></a><div><span data-hook="review-date">Reviewed in the United States on April 11, 2026</span></div><div data-hook="reviewText"><div class="a-teaser-describedby-collapsed a-hidden" style="display:none">Brief content visible, double tap to read full content.</div><div class="a-teaser-describedby-expanded a-hidden" style="display:none">Full content visible, double tap to read brief content.</div><div><div><div><div data-hook="reviewRichContentContainer"><p><span>Battery life is decent, around six hours of mixed use.</span></p></div></div></div></div></div></div><div><span data-hook="helpful-vote-statement">9 people found this helpful</span></div></div></span></li>
+    <li><span class="a-list-item"><div data-hook="reviewContainer"><div data-hook="review" class="a-section aok-relative"><div data-hook="genome-widget" class="a-row a-spacing-mini"><a href="/gp/profile/C" class="a-profile"><div class="a-profile-content"><span class="a-profile-name">Bob Lee</span></div></a></div><div><i class="a-icon a-icon-star"><span class="a-icon-alt">3 out of 5 stars</span></i></div><a class="a-link-normal" href="/portal/R3"><h5 data-hook="reviewTitle">Average machine</h5></a><div><span data-hook="review-date">Reviewed in the United States on March 2, 2026</span></div><div data-hook="reviewText"><div class="a-teaser-describedby-collapsed a-hidden" style="display:none">Brief content visible, double tap to read full content.</div><div class="a-teaser-describedby-expanded a-hidden" style="display:none">Full content visible, double tap to read brief content.</div><div><div><div><div data-hook="reviewRichContentContainer"><p><span>Fans get loud under load but it handles daily tasks fine.</span></p></div></div></div></div></div></div><div><span data-hook="helpful-vote-statement">3 people found this helpful</span></div></div></span></li>
+  </ul>
+</section>
 <section>
   <h2>行内吸附验证（span → p）</h2>
   <p id="p1">4722   PHP
@@ -97,8 +179,8 @@
 </section>
 
 <!-- 预期（SPA 路由拦截 + 整表收集）：收集模式点击任一卡片 → 采集盾接管命中（target=盾层，不在 a 内），
-     window 捕获路由器不触发，状态保持「未跳转」；3 个同签名 <a> 兄弟识别为列表 → 整表收集 3 条
-     （勾选「附链接」时链接列 = 各 a 的 href）；悬浮任一卡片 → 3 张卡片同时紫色高亮；再次点击整表移除。
+     window 捕获路由器不触发，状态保持「未跳转」；     3 个同签名 <a> 兄弟识别为列表 → 整表收集 3 条（需链接列时经「字段」→「＋ 点选」点卡片
+     内文字并把类型设为「链接」，链接列 = 各 a 的 href）；悬浮任一卡片 → 3 张卡片同时紫色高亮；再次点击整表移除。
      常规模式点击 → 路由器先于扩展执行，状态变为「已发生 SPA 跳转」（已知边界，
      链接红框 + 警示 toast 仍出现，但编程式导航无法事后取消） -->
 <section>

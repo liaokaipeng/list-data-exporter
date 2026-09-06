@@ -1,7 +1,7 @@
 /**
  * 点击扩展图标 → 按需注入内容脚本（避免在所有页面常驻加载 SheetJS）
  * 注入顺序即依赖顺序：xlsx.full.min.js（全局 XLSX）→ entry（守卫+命名空间）
- * → util → detect → format → main（主 UI）
+ * → util → detect → field（字段提取）→ format → main（主 UI）
  */
 chrome.action.onClicked.addListener(async (tab) => {
   try {
@@ -12,6 +12,7 @@ chrome.action.onClicked.addListener(async (tab) => {
         'content/entry.js',
         'content/util.js',
         'content/detect.js',
+        'content/field.js',
         'content/format.js',
         'content/main.js'
       ]
