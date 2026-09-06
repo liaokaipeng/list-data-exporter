@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "List Data Exporter：导出列表",
   "description": "List Data Exporter，网页内容收集导出，免费开源、不收集任何数据。点击页面列表收集全部同类条目（评论、商品、公告等），悬浮面板多选导出为 Excel / CSV / JSON / Markdown / HTML，支持附链接列。",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "action": {
     "default_title": "导出列表"
   },

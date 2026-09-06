@@ -205,7 +205,7 @@
     fmtSel.addEventListener('change', syncExportBtn);
     titleEl.addEventListener('mousedown', onDragStart);  // 标题栏拖拽（按钮除外）
 
-    nameInput.value = sanitizeFilename(document.title) + '_' + timestamp();
+    nameInput.value = clampName(sanitizeFilename(document.title), 40) + '_' + timestamp();
   }
 
   // 导出按钮文案与格式下拉同步（含「导出中…」结束后的恢复）
@@ -928,9 +928,16 @@
     return a ? a.href : '';
   }
 
-  /** 导出文件名：base + 可选列表名后缀 + 按格式补扩展名 */
+  /** 文件名长度钳制：按 Unicode 码点截断（防代理对被切成乱码） */
+  function clampName(s, max) {
+    const cps = Array.from(s);
+    return cps.length > max ? cps.slice(0, max).join('') : s;
+  }
+
+  /** 导出文件名：base + 可选列表名后缀 + 按格式补扩展名；
+   *  长度钳制（base ≤60 / 无后缀 ≤100 / 后缀 ≤40）防超长文件名 */
   function fileNamed(base, fmt, suffix) {
-    let name = suffix ? base + '_' + sanitizeFilename(suffix) : base;
+    let name = suffix ? clampName(base, 60) + '_' + clampName(sanitizeFilename(suffix), 40) : clampName(base, 100);
     if (!new RegExp('\\.' + fmt.ext + '$', 'i').test(name)) name += '.' + fmt.ext;
     return name.replace(/^\.+/, '');
   }

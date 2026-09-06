@@ -58,7 +58,7 @@
 
 - **选中管理**：`selected` Set<列表对象>（保序 = 导出顺序）+ `overlays` Map<列表, box[]>（每元素一个覆盖层，徽标 = 列表内序号，贴视口边缘翻内侧；增删元素后 `rebuildOverlay()` 整体重建并重排）；面板行序号徽标已选 = Sheet 序号（同 `groupId` 并组条目同号，Ctrl 并组直观可见）、未选 = 行序；条目 `groupId` 在 `addSelected(entry, merge)` 分配——Ctrl+点击（merge=true）并入最近选中条目的组、否则新开一组，`removeSelected()` 置空脱离并组
 
-- **导出**：迭代前快照已选非空列表（yield 间隙的 prune 不影响导出范围），按 `groupId` 聚合为表组——Ctrl 并组的多条目拼接为同一个表（组内行序 = 选择序；链接列口径 = 组内任一条目勾选「附链接」即有该列，未勾选条目的行链接留空）→ 逐表实时取 `items` 的 textContent 归一化（可选 `firstHref()` 附链接列，元素自身或内部第一个 a）→ 按格式生成文件列表（xlsx 多 Sheet + `!cols` 列宽自适应；CSV 多表拆多文件带列表名后缀；json/md/html 汇总单文件）→ 逐文件 base64 经后台 `chrome.downloads` 下载（失败回退 blob）；`yieldToMain()`（MessageChannel）逐表让出主线程；导出中按钮「导出中…」防重入；成功保留面板（toast「退出」动作），可换格式连续导出
+- **导出**：迭代前快照已选非空列表（yield 间隙的 prune 不影响导出范围），按 `groupId` 聚合为表组——Ctrl 并组的多条目拼接为同一个表（组内行序 = 选择序；链接列口径 = 组内任一条目勾选「附链接」即有该列，未勾选条目的行链接留空）→ 逐表实时取 `items` 的 textContent 归一化（可选 `firstHref()` 附链接列，元素自身或内部第一个 a）→ 按格式生成文件列表（xlsx 多 Sheet + `!cols` 列宽自适应；CSV 多表拆多文件带列表名后缀；json/md/html 汇总单文件）→ 逐文件 base64 经后台 `chrome.downloads` 下载（失败回退 blob）；`fileNamed()` 文件名长度钳制（默认名页面标题超 40 字符截断，导出时主体 ≤60 / 无后缀 ≤100 / 后缀 ≤40，`clampName()` 按码点截断防代理对半截断）；`yieldToMain()`（MessageChannel）逐表让出主线程；导出中按钮「导出中…」防重入；成功保留面板（toast「退出」动作），可换格式连续导出
 
 ## 关键设计决策
 
