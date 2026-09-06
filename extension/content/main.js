@@ -3,10 +3,12 @@
  * 多列表多选导出（xlsx / csv / json / md / html，须最后注入）
  * 依赖 window.__lde 命名空间（entry / util / detect / format 先行注入）；
  * UI 层与算法层只经命名空间单向调用。
- * v1.1 交互模型（无自动识别）：
- *   - 「添加选择」进入收集模式：逐个点击页面元素，每次点击 = 一条数据，
- *     累积为一个收集列表；点击已收集元素 = 移除（序号重排）；Esc / 「完成收集」结束；
- *     收集期间事件闸拦截一切页面跳转（mousedown/pointer/auxclick/Enter 等激活类事件）
+ * v1.2 交互模型（无自动识别）：
+ *   - 「添加选择」进入收集模式：点击列表中任一元素 = 收集该列表全部同类条目
+ *     （findContainingList 同签名兄弟识别，整表为一条目，再次点击整表移除）；
+ *     独立元素（无同类兄弟）回退单条累积收集；Esc / 「完成收集」结束；
+ *     收集期间采集盾（全屏透明层）接管指针命中 + 事件闸拦截激活类事件——
+ *     页面任何层级的监听（含 window 捕获路由拦截器）均无从触发跳转
  *   - 面板条目悬浮 → 页面该列表全部元素紫色高亮框（池化 + 滚动跟随定位）；
  *     页面悬浮已收集元素 → 面板条目滚入视野并短暂强调（双向联动）
  *   - 选中：面板/页面点选（覆盖层 + 列表内序号徽标，贴边翻内侧）；点击放行页面交互，
@@ -19,7 +21,7 @@
   const ns = window.__lde;
   if (!ns || ns.aborted) return; // 守卫已退出（再次点击图标 = 收起/退出），不初始化
   const { timestamp, sanitizeFilename, normalizeText, autoColWidths } = ns.util;
-  const { pickItem, previewOf, firstItemText, makeListName } = ns.detect;
+  const { pickItem, previewOf, firstItemText, makeListName, findContainingList } = ns.detect;
   const { toCsv, toJson, toMarkdown, toHtmlDocument } = ns.format;
 
   // 导出格式注册表：label 为按钮文案、ext 为文件扩展名、mime 为下载 MIME
@@ -45,13 +47,15 @@
   let exporting = false;   // 导出文件生成/编码进行中（防重入）
   let rafId = 0;
   let dragInfo = null;     // 标题栏拖拽状态
+  let shield = null;       // 采集盾：收集模式的全屏透明拦截层（见 mountShield）
 
-  // 收集列表数据模型：{ items: Element[]（有序 = 导出行序）, withLinks, preview, full, rowEl, flashT }
+  // 收集列表数据模型：{ items: Element[]（有序 = 导出行序）, container（整表收集的
+  // 列表容器，同容器点击 = 同一列表 toggle；单条收集无）, withLinks, preview, full, rowEl, flashT }
   let entries = [];
-  let currentManual = null;      // 收集模式中的活动列表
+  let currentManual = null;      // 收集模式中的活动列表（独立元素单条累积）
   const selected = new Set();    // 已选收集列表（Set 保序 = 导出顺序）
   const overlays = new Map();    // 列表 → 覆盖层盒子数组（每元素一个，含序号徽标）
-  let hoverTarget = null;        // { type:'entry', entry } | { type:'el', el }
+  let hoverTarget = null;        // { type:'entry', entry } | { type:'items', items } | { type:'el', el }
   let lastHoverEntry = null;     // 页面悬浮联动：上次强调的条目（防重复闪烁）
 
   // 高亮框池：面板条目悬浮时逐元素标记（复用避免反复创建/销毁）
@@ -268,7 +272,7 @@
   function resetHint() {
     setHint(entries.length
       ? '悬浮条目查看已收集元素，点击选择（可多选）'
-      : '点击「添加选择」，逐个点击页面元素收集数据');
+      : '点击「添加选择」，点击页面列表收集数据');
   }
 
   /* ---------------- 面板条目渲染 ---------------- */
@@ -505,16 +509,15 @@
 
   /* ---------------- 事件处理 ---------------- */
 
-  /** 页面悬浮：收集模式下高亮吸附候选（pickItem）；
+  /** 页面悬浮：收集模式下高亮识别所在列表（整表）/独立候选；
    *  常规模式下双向联动——悬浮已收集元素，面板对应条目滚入视野并短暂强调 */
   function onPageOver(e) {
     if (!active || !(e.target instanceof Element)) return;
     if (e.composedPath().includes(host)) { if (manualMode) clearHover(); return; }
     if (manualMode) {
-      const el = pickItem(e.target);
-      hoverTarget = el ? { type: 'el', el: el } : null;
-      clearHoverBoxes();
-      if (el) positionBox(takeBox(), el);
+      // 盾层为命中目标（进盾瞬间触发一次）→ 坐标探测还原真实元素；
+      // 之后在盾层内移动由 onShieldMove 持续探测
+      setManualHover(e.target === shield ? probeAt(e.clientX, e.clientY) : e.target);
       return;
     }
     if (collapsed) return;
@@ -543,12 +546,13 @@
   function onPageClick(e) {
     if (!active) return;
     if (e.composedPath().includes(host)) return; // 面板自身不拦截
-    const el = e.target instanceof Element ? e.target : null;
+    // 盾层为命中目标时经坐标探测还原真实页面元素，收集行为与直点一致
+    const el = (e.target === shield) ? probeAt(e.clientX, e.clientY)
+      : (e.target instanceof Element ? e.target : null);
     if (manualMode) {
       e.preventDefault();
       e.stopPropagation();
-      const item = el && pickItem(el);
-      if (item) collectToggle(item);
+      if (el) collectToggle(el); // 传原始元素：列表识别需自点击处向上找
       return;
     }
     const entry = el && entryAt(el);
@@ -584,9 +588,11 @@
     }, 1000);
   }
 
-  /** 收集模式事件闸：拦截至页面的激活类事件（mousedown / mouseup / pointerdown /
-   *  pointerup / auxclick），防站点在 click 之外的时机跳转（mousedown 导航、
-   *  中键新开标签页等）；preventDefault 顺带抑制文本选择/原生拖拽，点击收集更稳。
+  /** 收集模式事件闸（第二道防线，主防线为采集盾）：拦截至页面的激活类事件
+   *  （mousedown / mouseup / pointerdown / pointerup / auxclick），防站点在
+   *  click 之外的时机跳转（mousedown 导航、中键新开标签页等）——盾层被更高
+   *  z-index 页面元素盖住时命中回到页面元素，由此兜底；
+   *  preventDefault 顺带抑制文本选择/原生拖拽，点击收集更稳。
    *  面板自身事件放行（拖拽收尾含松开在页面上的场景，先于拦截处理） */
   function onPageGuard(e) {
     if (!active || !manualMode) return;
@@ -632,7 +638,10 @@
       rafId = 0;
       if (hoverTarget) {
         if (hoverTarget.type === 'entry') highlightEntry(hoverTarget.entry);
-        else if (hoverTarget.el.isConnected) {
+        else if (hoverTarget.type === 'items') {
+          clearHoverBoxes();
+          for (const el of hoverTarget.items) if (el.isConnected) positionBox(takeBox(), el);
+        } else if (hoverTarget.el.isConnected) {
           clearHoverBoxes();
           positionBox(takeBox(), hoverTarget.el);
         } else clearHover();
@@ -649,11 +658,68 @@
     });
   }
 
+  /* ---------------- 采集盾（收集模式全屏拦截层） ---------------- */
+
+  /** 采集盾：收集模式期间挂载的全屏透明层（z-index 仅低于面板宿主，面板不受影响）。
+   *  动机：VitePress 等站点在 window 捕获阶段注册 click 路由拦截器——先于本扩展
+   *  的 document 捕获监听执行，点击 <a> 包裹的元素（如 Element Plus 总览卡片）时
+   *  直接 router.go() 编程式跳转，事件闸的 preventDefault/stopPropagation 到达时
+   *  跳转已发起。盾层接管命中测试后，页面元素与任何层级的页面监听看到的 target
+   *  都是盾层本身（不在 <a> 内），无从触发跳转，注册顺序不再相关；
+   *  真实目标经 elementFromPoint 探测还原。wheel 不拦，滚动链到文档照常翻页 */
+  function mountShield() {
+    if (shield) return;
+    shield = document.createElement('div');
+    shield.style.cssText =
+      'position:fixed;inset:0;z-index:2147483646;cursor:crosshair;background:transparent;';
+    shield.addEventListener('mousemove', onShieldMove);
+    document.documentElement.appendChild(shield);
+  }
+
+  function unmountShield() {
+    if (!shield) return;
+    shield.remove();
+    shield = null;
+  }
+
+  /** 盾层命中探测：瞬间摘掉盾层 pointer-events 后按坐标取下方页面元素
+   *  （同步恢复无闪烁）。探测点不会落在面板上——面板在盾层之上，
+   *  其事件不会以盾层为目标 */
+  function probeAt(x, y) {
+    shield.style.pointerEvents = 'none';
+    const el = document.elementFromPoint(x, y);
+    shield.style.pointerEvents = '';
+    return el;
+  }
+
+  /** 盾层 mousemove：探测真实元素并吸附高亮（拖拽面板期间跳过防闪烁） */
+  function onShieldMove(e) {
+    if (!manualMode || dragInfo) return;
+    setManualHover(probeAt(e.clientX, e.clientY));
+  }
+
+  /** 收集模式悬浮吸附（页面直悬与盾层探测共用入口）：优先识别所在列表 →
+   *  整表紫色高亮——悬浮即昭示点击将收集的范围；无列表上下文回退单候选高亮 */
+  function setManualHover(el) {
+    clearHoverBoxes();
+    if (!(el instanceof Element)) { hoverTarget = null; return; }
+    const list = findContainingList(el);
+    if (list) {
+      hoverTarget = { type: 'items', items: list.items };
+      for (const it of list.items) if (it.isConnected) positionBox(takeBox(), it);
+      return;
+    }
+    const item = pickItem(el);
+    hoverTarget = item ? { type: 'el', el: item } : null;
+    if (item) positionBox(takeBox(), item);
+  }
+
   /* ---------------- 收集模式 ---------------- */
 
   function enterManual() {
     if (manualMode) return;
     manualMode = true;
+    mountShield(); // 先挂盾再清悬浮：此后悬浮高亮一律走盾层探测
     clearHover();
     // 每次进入收集模式新建一个列表（可多次进出建立多个收集列表）
     const entry = { items: [], withLinks: false, preview: '', full: '', rowEl: null, flashT: 0 };
@@ -664,12 +730,13 @@
     setLiveBadge(entry, true);
     addBtn.classList.add('lde-on');
     addBtn.textContent = '完成收集';
-    setHint('点击要收集的元素，再次点击移除（Esc 结束）', 'var(--c-info)');
+    setHint('点击列表中任一元素收集整个列表，再次点击移除（Esc 结束）', 'var(--c-info)');
   }
 
   function exitManual() {
     if (!manualMode) return;
     manualMode = false;
+    unmountShield(); // 摘盾后页面命中与交互恢复
     clearHover();
     addBtn.classList.remove('lde-on');
     addBtn.textContent = '＋ 添加选择';
@@ -694,22 +761,58 @@
     if (t) t.hidden = !on;
   }
 
-  /** 收集模式核心：点击元素加入活动列表（toggle）——
-   *  已在活动列表 → 移除（序号重排）；已在其他列表 → 提示不动作 */
+  /** 收集模式核心：点击元素 → findContainingList 识别所在列表（同签名兄弟 ≥2）
+   *  整表收集为独立条目；已收集同一列表（container 相同）→ 整表移除；
+   *  与其他列表条目重叠 → 提示不动作；无列表上下文的独立元素 → 回退
+   *  pickItem 吸附后单条累积（v1.1 行为，进活动列表） */
   function collectToggle(el) {
     const entry = currentManual;
     if (!entry) return;
-    const i = entry.items.indexOf(el);
+    const list = findContainingList(el);
+    if (list) {
+      const same = entries.find(en => en.container === list.container);
+      if (same) { // 再次点击同列表任一元素：整表移除
+        if (selected.has(same)) removeSelected(same);
+        if (same.rowEl) same.rowEl.remove();
+        const i = entries.indexOf(same);
+        if (i >= 0) entries.splice(i, 1);
+        syncEmpty();
+        setHint('已移除该列表（' + list.items.length + ' 条），继续点击或 Esc 结束', 'var(--c-info)');
+        return;
+      }
+      if (list.items.some(it => entries.some(en => en.items.includes(it)))) {
+        toast('所选列表的元素已在其他收集中', { type: 'info' });
+        return;
+      }
+      const en = {
+        container: list.container,
+        items: list.items,
+        withLinks: false,
+        preview: previewOf(list.items),
+        full: firstItemText(list.items),
+        rowEl: null,
+        flashT: 0
+      };
+      entries.push(en);
+      syncEmpty();
+      listEl.appendChild(buildRow(en));
+      addSelected(en); // 收集即选中
+      setHint('已收集列表 ' + list.items.length + ' 条，再次点击任一元素移除', 'var(--c-info)');
+      return;
+    }
+    const item = pickItem(el);
+    if (!item) return;
+    const i = entry.items.indexOf(item);
     if (i >= 0) {
       entry.items.splice(i, 1);
       if (!entry.items.length && selected.has(entry)) removeSelected(entry);
       else if (selected.has(entry)) rebuildOverlay(entry);
       updateEntryRow(entry);
-    } else if (entries.some(en => en !== entry && en.items.includes(el))) {
+    } else if (entries.some(en => en !== entry && en.items.includes(item))) {
       toast('该元素已在其他收集中', { type: 'info' });
       return;
     } else {
-      entry.items.push(el);
+      entry.items.push(item);
       if (selected.has(entry)) rebuildOverlay(entry);
       else addSelected(entry); // 收集第一条：列表进入选中态
       updateEntryRow(entry);
@@ -938,6 +1041,7 @@
     active = false;
     manualMode = false;
     collapsed = false;
+    unmountShield(); // 兜底：异常路径退出时确保摘除
     document.removeEventListener('mouseover', onPageOver, true);
     document.removeEventListener('click', onPageClick, true);
     document.removeEventListener('keydown', onKeyDown, true);

@@ -16,8 +16,9 @@
 <h1>列表收集测试页</h1>
 <p class="meta">预期值见各区块注释；配合 extension/ 手动回归（步骤见 test/README.md）。</p>
 
-<!-- 预期：打开面板空态「尚未收集任何列表」；「添加选择」后逐个点击卡片（点击卡片内标题/正文均吸附整卡），
-     收集 6 条；页面卡片显示序号框 1..6，面板行计数随点击增长 -->
+<!-- 预期：打开面板空态「尚未收集任何列表」；「添加选择」后点击任一卡片（点卡片内标题/正文/链接均生效）
+     → 6 张同 class 卡片整表收集（悬浮时 6 张全部紫色高亮昭示范围），页面卡片显示序号框 1..6，
+     面板行「6 条」；再次点击任一卡片 → 整表移除 -->
 <section>
   <h2>商品卡片（点击收集，共 6 张）</h2>
   <div class="card"><h3>无线降噪耳机 Pro</h3><p>主动降噪，续航 40 小时</p><a href="https://example.com/p/1">查看详情</a></div>
@@ -28,8 +29,8 @@
   <div class="card"><h3>桌面理线槽</h3><p>磁吸开合，铝合金</p><a href="https://example.com/p/6">查看详情</a></div>
 </section>
 
-<!-- 预期：收集模式下点击任一 li 内部（含链接文字）均吸附到整个 li；
-     收集后勾选「附链接」导出，链接列 = 各 li 内第一个 a 的绝对地址 -->
+<!-- 预期：收集模式下点击任一 li 内部（含链接文字）→ 整个 ul 的 10 个 li 整表收集为 10 行；
+     再次点击任一 li → 整表移除；勾选「附链接」导出，链接列 = 各 li 内第一个 a 的绝对地址 -->
 <section>
   <h2>评论列表（li 吸附验证，10 条）</h2>
   <ul id="comments">
@@ -46,8 +47,8 @@
   </ul>
 </section>
 
-<!-- 预期：点击段落内的行内 span（如「4722」）吸附到整个 p（行内 → 块级吸附）；
-     导出内容 = 整段文本归一化（「4722 PHP 币种已合并 多空格折叠」等） -->
+<!-- 预期：5 个 p 无 class 同签名 → 点击任一段（含其内行内 span）整表收集 5 条，再次点击整表移除；
+     导出内容 = 各段文本归一化（「4722 PHP 币种已合并」等，行内 span 折叠进所在 p） -->
 <section>
   <h2>行内吸附验证（span → p）</h2>
   <p id="p1">4722   PHP
@@ -58,11 +59,43 @@
   <p id="p5">第五段：<a href="https://example.com/inline">行内链接</a>也算内容</p>
 </section>
 
-<!-- 预期：收集模式中点击/中键此链接 → 不跳转、不新开标签（点击收集其所在 p）；
+<!-- 预期（无同类兄弟的独立元素 → 回退单条收集）：收集模式点击链接 → 不跳转，
+     其所在 p 单条收集（行内 a → 块级 p 吸附），再次点击移除；
      常规模式（非收集）下点击 → 拦截导航 + 红框 + 警示 toast -->
 <section>
   <h2>链接拦截验证</h2>
   <p><a href="https://example.com/nav" id="nav-link">这条链接在选择模式下应被拦截</a></p>
 </section>
+
+<!-- 预期（SPA 路由拦截 + 整表收集）：收集模式点击任一卡片 → 采集盾接管命中（target=盾层，不在 a 内），
+     window 捕获路由器不触发，状态保持「未跳转」；3 个同签名 <a> 兄弟识别为列表 → 整表收集 3 条
+     （勾选「附链接」时链接列 = 各 a 的 href）；悬浮任一卡片 → 3 张卡片同时紫色高亮；再次点击整表移除。
+     常规模式点击 → 路由器先于扩展执行，状态变为「已发生 SPA 跳转」（已知边界，
+     链接红框 + 警示 toast 仍出现，但编程式导航无法事后取消） -->
+<section>
+  <h2>SPA 路由拦截 + 整表收集验证（a 包裹卡片网格）</h2>
+  <p>状态：<span id="spa-status" class="meta">未跳转</span></p>
+  <a href="?spa=button" style="text-decoration:none;color:inherit">
+    <div class="card" style="cursor:pointer"><h3>Button 组件卡片</h3><p>模拟 Element Plus 总览页 a 包裹的卡片</p></div>
+  </a>
+  <a href="?spa=border" style="text-decoration:none;color:inherit">
+    <div class="card" style="cursor:pointer"><h3>Border 组件卡片</h3><p>同签名兄弟整表收集</p></div>
+  </a>
+  <a href="?spa=input" style="text-decoration:none;color:inherit">
+    <div class="card" style="cursor:pointer"><h3>Input 组件卡片</h3><p>采集盾 + 同签名识别组合验证</p></div>
+  </a>
+</section>
+<script>
+  // 模拟 VitePress 路由拦截器：注册在 window 捕获阶段（必然早于扩展的 document 捕获
+  // 监听执行），写法与真实实现一致——先查 defaultPrevented，再 closest('a') 找链接后
+  // 编程式跳转（真实站点为 router.go()：pushState + 视图切换，preventDefault 拦不住）
+  window.addEventListener('click', function (e) {
+    if (e.defaultPrevented) return;
+    var a = e.target instanceof Element && e.target.closest('a');
+    if (!a) return;
+    e.preventDefault();
+    document.getElementById('spa-status').textContent = '已发生 SPA 跳转（拦截失败）';
+  }, true);
+</script>
 </body>
 </html>

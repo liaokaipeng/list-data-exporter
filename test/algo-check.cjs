@@ -2,7 +2,7 @@
  * 回归测试：util / detect 纯函数 / format 序列化（Node 直接运行，零依赖）
  * 内容脚本经 window.__lde 命名空间挂载（零构建无模块系统），此处模拟浏览器
  * 全局后按依赖序加载（util → detect → format），仅覆盖可离线回归的纯函数；
- * pickItem（依赖 DOM/computedStyle）与 UI 层走 test/fixture.html 浏览器回归。
+ * pickItem / findContainingList（依赖 DOM）与 UI 层走 test/fixture.html 浏览器回归。
  */
 'use strict';
 const path = require('path');
@@ -45,6 +45,8 @@ ok(util.escapeHtml('<a href="x">&\'') === '&lt;a href=&quot;x&quot;&gt;&amp;&#39
 
 ok(detect.makeListName(0) === '收集1', 'makeListName 收集N 命名');
 ok(detect.makeListName(2) === '收集3', 'makeListName 序号递增');
+ok(detect.elSig({ tagName: 'DIV', classList: ['card', 'is-hover'] }) === 'DIV|card.is-hover', 'elSig class 排序稳定');
+ok(detect.elSig({ tagName: 'A', classList: [] }) === 'A', 'elSig 无 class 仅 tagName');
 ok(detect.firstItemText([{ textContent: '  hello   world ' }]) === 'hello world', 'firstItemText 归一化');
 ok(detect.firstItemText([]) === '', 'firstItemText 空列表');
 ok(detect.previewOf([{ textContent: 'x'.repeat(50) }]).length === 41, 'previewOf 截断 40 字符 + 省略号');

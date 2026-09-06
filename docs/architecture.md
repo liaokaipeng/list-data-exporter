@@ -42,19 +42,19 @@
 | --------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | entry.js  | —    | 注入守卫 + `__lde` 命名空间                                                                                                                                                                                                      |
 | util.js   | —    | timestamp / sanitizeFilename / escapeHtml / normalizeText（视觉归一化）/ truncate / visualWidth（CJK 双宽）/ autoColWidths（列宽钳制 6~50）；纯函数，algo-check.cjs 离线回归                                                       |
-| detect.js | util | 手动收集辅助：`pickItem()` 点击吸附候选元素（li 优先 → 行内 display:inline 向上到块级，body/html 除外）；`previewOf()/firstItemText()` 首条预览（Element[] 入参）；`makeListName()` 收集N 命名；纯函数离线回归，pickItem 走浏览器回归 |
+| detect.js | util | 手动收集辅助：`findContainingList()` 所在列表识别（自点击处向上找最近一级「同签名兄弟 ≥2」的祖先，签名 = tagName + 排序 class，见 `elSig()`，覆盖 a 包裹卡片网格 / div 伪列表）；`pickItem()` 单条回退时点击吸附候选（li 优先 → 行内 display:inline 向上到块级，body/html 除外）；`previewOf()/firstItemText()` 首条预览（Element[] 入参）；`makeListName()` 收集N 命名；elSig/预览/命名纯函数离线回归，findContainingList/pickItem 走浏览器回归 |
 | format.js | util | 导出格式序列化纯函数：`toCsv()`（RFC4180+BOM+CRLF）/ `toJson()`（单列表行对象、多列表名键嵌套）/ `toMarkdown()`（GFM + 二级标题分区）/ `toHtmlDocument()`（完整文档）；数据模型 `{ name, rows:[{content,link}], withLinks }`；离线回归 |
 | main.js   | 其余全部 | 主 UI / 事件 / 收集模式 / 选中管理 / 导出 / 退出清理（详见下）                                                                                                                                                                   |
 
 ### main.js 关键机制
 
-- **UI/事件**：单个 Shadow DOM host（`all:initial` 隔离页面样式），含悬浮面板、高亮框池、选中覆盖层、toast 容器。`mouseover` 捕获：收集模式下高亮吸附候选（pickItem）；常规模式双向联动——悬浮页面已收集元素，面板对应条目 `scrollIntoView` + 短暂强调（`entryAt()` 自目标向上逐祖先查 items 归属）。`click` 捕获：收集模式拦截所有点击逐条收集/移除；常规模式仅拦截已收集元素点选（选中/取消）与链接 `a[href]` 导航（就地红框 1s + 警示 toast），其余放行（翻页/筛选可用，`pruneDetached()` 剔除被替换的元素）。`keydown`：Esc 结束收集 / 退出会话；Enter 导出（焦点在面板控件或页面元素上时放行）。`scroll`/`resize` rAF 节流重定位
+- **UI/事件**：单个 Shadow DOM host（`all:initial` 隔离页面样式），含悬浮面板、高亮框池、选中覆盖层、toast 容器。`mouseover` 捕获：收集模式下高亮识别所在列表（整表）/独立候选（`setManualHover()`）；常规模式双向联动——悬浮页面已收集元素，面板对应条目 `scrollIntoView` + 短暂强调（`entryAt()` 自目标向上逐祖先查 items 归属）。`click` 捕获：收集模式拦截所有点击做整表/单条收集与移除；常规模式仅拦截已收集元素点选（选中/取消）与链接 `a[href]` 导航（就地红框 1s + 警示 toast），其余放行（翻页/筛选可用，`pruneDetached()` 剔除被替换的元素）。`keydown`：Esc 结束收集 / 退出会话；Enter 导出（焦点在面板控件或页面元素上时放行）。`scroll`/`resize` rAF 节流重定位
 
-- **收集模式**（v1.1 核心通道，无自动识别）：「添加选择」进入（每次进入新建列表 `currentManual`，行带「收集中」徽标，按钮变「完成收集」）；点击元素 `pickItem()` 吸附后 `collectToggle()`——已在活动列表 → 移除（序号重排），已在其他列表 → toast 不动作，否则追加；第一条收集时列表自动进入选中态；Esc / 「完成收集」结束，空列表整行移除。数据模型：`{ items: Element[]（有序 = 导出行序）, withLinks, preview, full, rowEl, flashT }`
+- **收集模式**（v1.2 核心通道，无自动识别）：「添加选择」进入（每次进入新建单条收集列表 `currentManual`，行带「收集中」徽标，按钮变「完成收集」）；进入时挂载**采集盾**（`mountShield()`）——全屏透明层（`position:fixed; inset:0`，z-index 2147483646 仅低于面板宿主）接管所有指针命中：页面元素与任何层级的页面监听（含 window 捕获路由拦截器）看到的 target 均为盾层，无从触发跳转；真实目标经 `probeAt()`（瞬间摘掉盾层 `pointer-events` 后 `elementFromPoint`，同步恢复无闪烁）还原——盾层 `mousemove` 探测悬浮（`setManualHover()`：优先 `findContainingList()` 识别所在列表整表高亮，无列表回退 `pickItem()` 单候选），click 在 document 捕获中探测后 `collectToggle()`；面板在其上不受影响，wheel 放行滚动链到文档；Esc / 「完成收集」时 `unmountShield()` 摘除。`collectToggle()` 先 `findContainingList()`（自点击处向上最近一级「同签名兄弟 ≥2」的祖先，签名 = tagName + 排序 class）：命中 → 该组兄弟整表收集为独立条目（条目记录 `container`，同容器再次点击 = 整表移除，条目与其他列表重叠 → toast 不动作）；未命中（独立元素）→ `pickItem()` 吸附后单条累积进 `currentManual`（已在活动列表 → 移除序号重排，已在其他列表 → toast，否则追加）。收集即选中；空列表整行移除。数据模型：`{ items: Element[]（有序 = 导出行序）, container（整表条目的列表容器）, withLinks, preview, full, rowEl, flashT }`
 
 - **悬浮面板**：右侧默认贴边（360px，95vw/70vh 上限），标题栏 mousedown 拖拽（clamp 视口内）；图标再点 = 收起面板（会话保留，覆盖层与监听不动；收起前先结束收集模式），收起后再点 / Esc /「退出」= 全量清理；深色模式经 prefers-color-scheme 覆写 token；prefers-reduced-motion 关动效
 
-- **高亮框池**（`boxPool`）：面板条目悬浮 → 该列表全部已收集元素逐一紫色高亮框（`takeBox()` 复用池避免反复创建）；收集模式悬浮候选同风格；滚动/resize 经 `hoverTarget` 重算定位
+- **高亮框池**（`boxPool`）：面板条目悬浮 → 该列表全部已收集元素逐一紫色高亮框（`takeBox()` 复用池避免反复创建）；收集模式悬浮整表候选/单候选同风格；滚动/resize 经 `hoverTarget`（entry / items / el 三型）重算定位
 
 - **选中管理**：`selected` Set<列表对象>（保序 = 导出顺序）+ `overlays` Map<列表, box[]>（每元素一个覆盖层，徽标 = 列表内序号，贴视口边缘翻内侧；增删元素后 `rebuildOverlay()` 整体重建并重排）；面板行序号徽标已选 = 选中序号、未选 = 行序
 
@@ -66,11 +66,14 @@
 | --- | --- |
 | 零构建多文件：注入顺序即依赖 + `__lde` 命名空间 | 不引打包器（硬约束）；每文件一个 IIFE 挂载模块，service-worker 的 files 数组即依赖拓扑序；util/detect/format 纯函数使 algo-check.cjs 可离线加载回归 |
 | 按需注入而非静态 content_scripts | SheetJS 体积大，避免所有页面常驻开销；activeTab 权限利于商店审核 |
-| 手动收集为唯一通道（v1.1 取消自动识别） | 识别率不可控（门槛/伪列表/噪声列表），误识别比无识别更伤信任；用户逐条点击所见即所得，收集范围完全由用户定义 |
-| 点击吸附规则：li 优先 → 行内向上到块级 | 一刀切到 e.target 太碎（点 span 得 span）、切到固定祖先太粗；li 是页面语义上现成的「一条」；行内→块级符合「视觉上独立的一条」直觉；body/html 排除防全页选中 |
+| 手动收集为唯一通道（v1.1 取消自动识别） | 识别率不可控（门槛/伪列表/噪声列表），误识别比无识别更伤信任；用户点击所见即所得（整表/单条），收集范围完全由用户定义 |
+| 收集模式整表收集（同签名兄弟识别） | 点击列表中一个元素的意图几乎总是导出整个列表（如 Element Plus 总览卡片网格：`<a>` 包裹、无 ul/ol，自动识别覆盖不到）；同签名兄弟组（tagName + 排序 class）是最小可靠的「列表」信号，就近取最内层；悬浮整表高亮让范围先于点击可见，误判可整表移除当场撤销 |
+| 点击吸附规则（单条回退路径）：li 优先 → 行内向上到块级 | 一刀切到 e.target 太碎（点 span 得 span）、切到固定祖先太粗；li 是页面语义上现成的「一条」；行内→块级符合「视觉上独立的一条」直觉；body/html 排除防全页选中 |
+| 整表条目以 container 元素为 toggle 键 | 同一列表的任一元素点击语义一致（整表收集/整表移除），无需比对条目集；DOM 结构性相等比对不可靠，容器引用同一即同列表 |
 | 每次进入收集模式新建列表 | 一次进出 = 一个语义完整的收集（如「这页商品」）；多次进出天然支持多列表多 Sheet 导出，无需额外 UI |
 | 收集即选中（第一条自动进入选中态） | 用户点击收集的意图就是导出它；省去收集后再去找面板行勾选的一步；空列表自动退出选中避免导出空表 |
 | 收集模式事件闸（click 外的激活类事件全拦） | 站点可能在 mousedown/pointerup 等时机脚本导航、中键 auxclick 新开标签，仅拦 click 不够；拦掉 focus/文本选择/原生拖拽的副作用在短暂的收集模式中可接受，且抑制原生拖拽让点击收集更稳定 |
+| 采集盾（收集模式全屏透明层接管命中） | VitePress 等站点在 window 捕获阶段注册 click 路由拦截器，先于扩展的 document 捕获监听执行，点击 `<a>` 包裹的元素（如 Element Plus 总览卡片）时直接 `router.go()` 编程式跳转——`preventDefault`/`stopPropagation` 到达时跳转已发起，事件闸无解；盾层改变命中目标（target = 盾层而非页面 `<a>` 内元素），任何层级的页面监听都找不到可导航目标，与注册顺序无关；`elementFromPoint` 同步探测还原真实目标，交互体验不变（悬浮吸附/收集/滚动照常）。事件闸降级为第二道防线（盾层被更高 z-index 页面元素盖住时兜底） |
 | 收集模式中点击已收集元素 = 移除 | toggle 语义统一且即时可逆，误点当场撤销，无需撤销栈 |
 | 跨列表元素不重复收集（toast 提示） | 元素属多列表会让导出行重复、页面序号徽标混乱；提示后重新收集成本低 |
 | 覆盖层徽标 = 列表内序号而非全局序号 | 页面上每个框标「它在自己的列表里是第几条」，与导出行序一致、与用户收集顺序一致 |
@@ -92,4 +95,10 @@
 
 - pickItem 的吸附规则是启发式（li / 行内→块级两级），复杂布局（绝对定位浮层、表格内 td）可能吸附到意料外的层级，用户可通过收集/移除即时纠正
 
-- 事件闸对早于本扩展注册的同节点同阶段（document 捕获）页面监听无效（先注册先执行），此类极端场景需全屏覆盖层方案，暂不处理
+- findContainingList 就近取最内层同签名组：嵌套列表点击总是命中最内层；同标签同 class 兄弟 ≥2 即视为列表，粒度不可自定义（误判经再次点击整表移除撤销）；表格内点击会把同行同签名单元格识别为「列表」（表格场景建议用 web-table-exporter）
+
+- 事件闸（第二道防线）对早于本扩展注册的同节点同阶段（document 捕获）页面监听无效（先注册先执行）；采集盾为主防线不受此限，但被个别页面元素（z-index 高于 2147483646 的全屏浮层）盖住时命中回到页面元素，由事件闸兜底，window 级捕获监听仍可能漏拦（极端场景）
+
+- 常规模式（非收集）不设盾（需放行翻页/筛选），window 捕获路由站点上点击链接仍可能被页面先行 SPA 跳转——链接拦截对默认行为导航有效，对已发起的编程式导航无法事后取消（已知边界）
+
+- 采集盾 wheel 放行（滚动链到文档级），收集模式中页面内嵌滚动容器（overflow:auto 的非文档级区域）无法滚轮滚动，需先滚动文档或短暂结束收集
