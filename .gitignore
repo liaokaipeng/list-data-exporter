@@ -5,6 +5,9 @@
 extension.zip
 release/*.zip
 
+# 测试材料（本地保存的网页，仅浏览器回归用，不随仓库分发）
+test_web/
+
 # 系统文件
 Thumbs.db
 .DS_Store
