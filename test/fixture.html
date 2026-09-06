@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>列表收集测试页</title>
+<style>
+  body { font: 14px/1.6 -apple-system, "Microsoft YaHei", sans-serif; color: #333; margin: 24px; max-width: 900px; }
+  section { margin-bottom: 32px; }
+  h2 { font-size: 16px; border-bottom: 2px solid #7c3aed; padding-bottom: 4px; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
+  .card h3 { margin: 0 0 4px; font-size: 14px; }
+  .meta { color: #999; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>列表收集测试页</h1>
+<p class="meta">预期值见各区块注释；配合 extension/ 手动回归（步骤见 test/README.md）。</p>
+
+<!-- 预期：打开面板空态「尚未收集任何列表」；「添加选择」后逐个点击卡片（点击卡片内标题/正文均吸附整卡），
+     收集 6 条；页面卡片显示序号框 1..6，面板行计数随点击增长 -->
+<section>
+  <h2>商品卡片（点击收集，共 6 张）</h2>
+  <div class="card"><h3>无线降噪耳机 Pro</h3><p>主动降噪，续航 40 小时</p><a href="https://example.com/p/1">查看详情</a></div>
+  <div class="card"><h3>机械键盘 87 键</h3><p>热插拔轴体，RGB 背光</p><a href="https://example.com/p/2">查看详情</a></div>
+  <div class="card"><h3>4K 便携显示器</h3><p>15.6 寸，Type-C 一线连</p><a href="https://example.com/p/3">查看详情</a></div>
+  <div class="card"><h3>人体工学椅</h3><p>腰托支撑，网布透气</p><a href="https://example.com/p/4">查看详情</a></div>
+  <div class="card"><h3>升降桌 1.4m</h3><p>双电机，记忆高度</p><a href="https://example.com/p/5">查看详情</a></div>
+  <div class="card"><h3>桌面理线槽</h3><p>磁吸开合，铝合金</p><a href="https://example.com/p/6">查看详情</a></div>
+</section>
+
+<!-- 预期：收集模式下点击任一 li 内部（含链接文字）均吸附到整个 li；
+     收集后勾选「附链接」导出，链接列 = 各 li 内第一个 a 的绝对地址 -->
+<section>
+  <h2>评论列表（li 吸附验证，10 条）</h2>
+  <ul id="comments">
+    <li><a href="https://example.com/comment/1">张三：这个功能真好用</a></li>
+    <li><a href="https://example.com/comment/2">李四：期待已久，赞</a></li>
+    <li><a href="https://example.com/comment/3">王五：导出的 Excel 很整齐</a></li>
+    <li><a href="https://example.com/comment/4">赵六：链接列也有了</a></li>
+    <li><a href="https://example.com/comment/5">孙七：手动收集很直观</a></li>
+    <li><a href="https://example.com/comment/6">周八：支持多选导出</a></li>
+    <li><a href="https://example.com/comment/7">吴九：深色模式跟随系统</a></li>
+    <li><a href="https://example.com/comment/8">郑十：CSV 打开不乱码</a></li>
+    <li><a href="https://example.com/comment/9">钱一：Markdown 表格正常</a></li>
+    <li><a href="https://example.com/comment/10">刘二：导出完还能继续收集</a></li>
+  </ul>
+</section>
+
+<!-- 预期：点击段落内的行内 span（如「4722」）吸附到整个 p（行内 → 块级吸附）；
+     导出内容 = 整段文本归一化（「4722 PHP 币种已合并 多空格折叠」等） -->
+<section>
+  <h2>行内吸附验证（span → p）</h2>
+  <p id="p1">4722   PHP
+      币种已合并</p>
+  <p id="p2">第二段：常规文本内容</p>
+  <p id="p3">第三段：<span>行内元素</span>与文本混排</p>
+  <p id="p4">第四段：验证吸附边界</p>
+  <p id="p5">第五段：<a href="https://example.com/inline">行内链接</a>也算内容</p>
+</section>
+
+<!-- 预期：收集模式中点击/中键此链接 → 不跳转、不新开标签（点击收集其所在 p）；
+     常规模式（非收集）下点击 → 拦截导航 + 红框 + 警示 toast -->
+<section>
+  <h2>链接拦截验证</h2>
+  <p><a href="https://example.com/nav" id="nav-link">这条链接在选择模式下应被拦截</a></p>
+</section>
+</body>
+</html>
